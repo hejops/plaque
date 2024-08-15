@@ -43,8 +43,17 @@ func main() {
 	mpv_args := strings.Split("--mute=no --no-audio-display --pause=no --start=0%", " ")
 	mpv_args = append(mpv_args, dir)
 
-	// TODO: handover stdout + keyboard control to mpv
-	exec.Command("mpv", mpv_args...).Run()
+	cmd := exec.Command("mpv", mpv_args...)
+
+	// handover std streams + keyboard control to mpv
+	// https://github.com/search?type=code&q=exec.Command(%22mpv%22
+	// https://github.com/aynakeya/blivechat/blob/9c4a8ddddc9c5295a9a8d368ac5dab62557397c5/app/heiting/heiting.go#L136
+	cmd.Stdout = os.Stdout
+	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		panic(err)
+	}
 
 	// TODO: relpath -> search -> primary release id -> rate
 
