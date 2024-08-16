@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,43 +21,68 @@ import (
 // mpv album
 // check resume
 
-// no error-handling
-func library_root() string {
-	// TODO: lazy_static equivalent?
-	return os.Getenv("MU")
+func play(dir string) tea.Cmd {
+	mpv_args := strings.Split("--mute=no --no-audio-display --pause=no --start=0%", " ")
+	mpv_args = append(mpv_args, dir)
+	cmd := exec.Command("mpv", mpv_args...)
+
+	// // handover std streams + keyboard control to mpv
+	// // https://github.com/search?type=code&q=exec.Command(%22mpv%22
+	// // https://github.com/aynakeya/blivechat/blob/9c4a8ddddc9c5295a9a8d368ac5dab62557397c5/app/heiting/heiting.go#L136
+	// cmd.Stdout = os.Stdout
+	// cmd.Stdin = os.Stdin
+	// cmd.Stderr = os.Stderr
+	//
+	// if err := cmd.Run(); err != nil {
+	// 	panic(err)
+	// }
+
+	return tea.Sequence(
+		// if the altscreen is not used, new
+		// model is rendered before (above) mpv
+		tea.EnterAltScreen,
+		tea.ExecProcess(cmd, nil),
+		tea.ExitAltScreen,
+		tea.Println("rating..."),
+		tea.ClearScreen,
+	)
 }
 
 func main() {
-	dirs, err := os.ReadDir(library_root()) // sorted
-	// dirs, err := os.ReadDir(library_root() + "/Metallica")
+	if _, err := tea.NewProgram(newModel(GetQueue(10), Queue), tea.WithAltScreen()).Run(); err != nil {
+		panic(err)
+	}
+	return
+
+	root := LibraryRoot()
+	items, err := os.ReadDir(root)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	p := tea.NewProgram(initialModel(dirs[:10])) //, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
 		panic(err)
 	}
 
-	dir := filepath.Join(library_root(), "Metallica", "Ride the Lightning (1984)")
-	mpv_args := strings.Split("--mute=no --no-audio-display --pause=no --start=0%", " ")
-	mpv_args = append(mpv_args, dir)
+	maxItems := 10
+	// note: if terminal currently has n rows, and len(m.items) > n, only
+	// the last n rows will be displayed
+	if len(items) > maxItems {
+		items = items[:maxItems]
+	}
+	items2 := []string{}
+	for _, x := range items {
+		items2 = append(items2, filepath.Join(root, x.Name()))
+	}
 
-	cmd := exec.Command("mpv", mpv_args...)
-
-	// handover std streams + keyboard control to mpv
-	// https://github.com/search?type=code&q=exec.Command(%22mpv%22
-	// https://github.com/aynakeya/blivechat/blob/9c4a8ddddc9c5295a9a8d368ac5dab62557397c5/app/heiting/heiting.go#L136
-	cmd.Stdout = os.Stdout
-	cmd.Stdin = os.Stdin
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	if _, err := tea.NewProgram(newModel(items2, Artists)).Run(); err != nil {
 		panic(err)
 	}
+
+	fmt.Println("end")
+
+	// dir := filepath.Join(LibraryRoot(), "Metallica", "Ride the Lightning (1984)")
 
 	// TODO: relpath -> search -> primary release id -> rate
 
 	// discogsGet(4319735)
+	// rateRelease(4319735)
 
 	// _ = p
 }
