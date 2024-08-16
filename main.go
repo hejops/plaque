@@ -22,6 +22,13 @@ import (
 // check resume
 
 func play(dir string) tea.Cmd {
+	// clear screen (?)
+	// play album (mpv)
+	// rate
+	// remove from queue
+	// then prepare new model from queue
+	// play(selected)
+
 	mpv_args := strings.Split("--mute=no --no-audio-display --pause=no --start=0%", " ")
 	mpv_args = append(mpv_args, dir)
 	cmd := exec.Command("mpv", mpv_args...)
@@ -38,8 +45,8 @@ func play(dir string) tea.Cmd {
 	// }
 
 	return tea.Sequence(
-		// if the altscreen is not used, new
-		// model is rendered before (above) mpv
+		// if the altscreen is not used, new model is (inexplicably)
+		// rendered before (above) mpv
 		tea.EnterAltScreen,
 		tea.ExecProcess(cmd, nil),
 		tea.ExitAltScreen,
@@ -49,18 +56,18 @@ func play(dir string) tea.Cmd {
 }
 
 func main() {
-	if _, err := tea.NewProgram(newModel(GetQueue(10), Queue), tea.WithAltScreen()).Run(); err != nil {
+	if _, err := tea.NewProgram(newBrowser(GetQueue(10), Queue), tea.WithAltScreen()).Run(); err != nil {
 		panic(err)
 	}
 	return
 
+	// init Artists mode
 	root := LibraryRoot()
 	items, err := os.ReadDir(root)
 	if err != nil {
 		panic(err)
 	}
-
-	maxItems := 10
+	maxItems := 25
 	// note: if terminal currently has n rows, and len(m.items) > n, only
 	// the last n rows will be displayed
 	if len(items) > maxItems {
@@ -71,13 +78,11 @@ func main() {
 		items2 = append(items2, filepath.Join(root, x.Name()))
 	}
 
-	if _, err := tea.NewProgram(newModel(items2, Artists)).Run(); err != nil {
+	if _, err := tea.NewProgram(newBrowser(items2, Artists)).Run(); err != nil {
 		panic(err)
 	}
 
 	fmt.Println("end")
-
-	// dir := filepath.Join(LibraryRoot(), "Metallica", "Ride the Lightning (1984)")
 
 	// TODO: relpath -> search -> primary release id -> rate
 
