@@ -55,30 +55,30 @@ func play(dir string) tea.Cmd {
 	)
 }
 
-func main() {
-	if _, err := tea.NewProgram(newBrowser(GetQueue(10), Queue), tea.WithAltScreen()).Run(); err != nil {
-		panic(err)
-	}
-	return
-
-	// init Artists mode
+func artistBrowser() Browser {
 	root := LibraryRoot()
-	items, err := os.ReadDir(root)
+	artists, err := os.ReadDir(root)
 	if err != nil {
 		panic(err)
 	}
-	maxItems := 25
-	// note: if terminal currently has n rows, and len(m.items) > n, only
-	// the last n rows will be displayed
-	if len(items) > maxItems {
-		items = items[:maxItems]
-	}
-	items2 := []string{}
-	for _, x := range items {
-		items2 = append(items2, filepath.Join(root, x.Name()))
-	}
 
-	if _, err := tea.NewProgram(newBrowser(items2, Artists)).Run(); err != nil {
+	items := []string{}
+	for _, a := range artists {
+		items = append(items, filepath.Join(root, a.Name()))
+	}
+	return newBrowser(items, Artists)
+}
+
+func main() {
+	// fmt.Println(tea.KeyPgDown.String())
+	// return
+
+	// if _, err := tea.NewProgram(newBrowser(GetQueue(10), Queue), tea.WithAltScreen()).Run(); err != nil {
+	// 	panic(err)
+	// }
+	// return
+
+	if _, err := tea.NewProgram(artistBrowser()).Run(); err != nil {
 		panic(err)
 	}
 

@@ -95,6 +95,7 @@ type Browser struct {
 
 	// guaranteed to be valid fullpaths
 	items   []string
+	offset  int
 	cursor  int
 	input   string
 	matches []int
@@ -176,14 +177,13 @@ func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 
 		case "ctrl+w":
 			b.input = ""
-			b.cursor = 0 // does fzf reset cursor pos?
+			b.cursor = 0 // fzf resets cursor pos
 			b.updateSearch(msg)
 			return b, nil
 
 		case "ctrl+c", "esc":
 			// os.Exit(0) // ungraceful exit
 			// return nil, tea.Quit // bad pointer
-			// fmt.Println(b.input)
 			return b, tea.Quit // graceful exit
 
 		case "backspace":
@@ -193,18 +193,38 @@ func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 			}
 
 		case "up", "ctrl+k":
-			if b.cursor > 0 {
-				b.cursor--
-			} else {
+			b.cursor--
+			if b.cursor < 0 {
 				b.cursor = len(b.matches) - 1
 			}
 
+		case "pgup":
+			b.cursor = 0
+			b.offset -= b.height
+
+		case "pgdown":
+			b.cursor = 0
+			b.offset += b.height
+
+			// // exec.Command("notify-send", strconv.Itoa(len(b.matches))).Run()
+			// // exec.Command("notify-send", strconv.Itoa(b.cursor)).Run()
+			// if b.cursor > b.height-1 {
+			// 	// b.cursor = len(b.matches) - 1
+			// 	// b.offset = b.cursor //- b.height
+			// 	b.offset = b.height
+			// 	exec.Command("notify-send", strconv.Itoa(b.offset)).Run()
+			// 	// b.cursor = 0
+			// }
+			// // return b, nil
+
 		case "down", "ctrl+j":
-			if b.cursor < len(b.matches)-1 {
-				b.cursor++
-			} else {
+			b.cursor++
+			if b.cursor > len(b.matches)-1 {
 				b.cursor = 0
 			}
+			// if b.cursor > b.height {
+			// 	b.offset = b.cursor - b.height
+			// }
 
 		// https://github.com/antonmedv/walk/blob/ba821ed78f31e0ebd46eeef19cfe642fc1ec4330/main.go#L259 (?)
 		case "enter":
@@ -260,7 +280,13 @@ func (b Browser) View() string {
 
 	root := LibraryRoot()
 	lines := []string{}
-	for i, idx := range b.matches {
+
+	for i, idx := range b.matches { //[b.offset:] {
+
+		if i < b.offset {
+			// exec.Command("notify-send", strconv.Itoa(i)).Run()
+			continue
+		}
 
 		cursor := " "
 		if b.cursor == i { // 'raw' 0-based index
@@ -294,6 +320,10 @@ func (b Browser) View() string {
 			line = line[:b.width/2] + "..."
 		}
 		lines = append(lines, line)
+
+		if i > b.height-2 {
+			break
+		}
 	}
 	left := strings.Join(lines, "\n")
 	// return left
