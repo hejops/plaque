@@ -19,7 +19,8 @@ type Discogs struct {
 }
 
 type Library struct {
-	Root string `toml:"root"`
+	Root  string `toml:"root"`
+	Queue string `toml:"queue"`
 }
 
 // https://github.com/gami/simple_arch_example/blob/34fb11a31acc35fcb01a1e36c3ea1194bbe23074/config/config.go#L32

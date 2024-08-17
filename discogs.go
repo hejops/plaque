@@ -6,14 +6,14 @@ import (
 	"net/http"
 )
 
-const API_PREFIX = "https://api.discogs.com"
+const ApiPrefix = "https://api.discogs.com"
 
 func discogsGet(urlpath string) string {
 	client := &http.Client{
 		//
 	}
 
-	url := fmt.Sprintf("%s/%s", API_PREFIX, urlpath)
+	url := fmt.Sprintf("%s/%s", ApiPrefix, urlpath)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		panic(err)

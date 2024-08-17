@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
 	"os"
 	"os/exec"
 	"path"
@@ -12,64 +11,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
-
-const QueuedSymbol = "Q"
-
-func intRange(n int) []int {
-	ints := []int{}
-	for i := range n {
-		ints = append(ints, i)
-	}
-	return ints
-}
-
-// Select n random items from the queue file (containing relpaths), and return
-// them as fullpaths
-func GetQueue(n int) []string {
-	// TODO: symlink file to here
-	queueFile := os.ExpandEnv("$HOME/dita/dita/play/queue.txt")
-	b, err := os.ReadFile(queueFile)
-	if err != nil {
-		panic(err)
-	}
-	relpaths := strings.Split(string(b), "\n")
-	// TODO: split off sampling
-	// https://stackoverflow.com/a/12267471
-	for i := range relpaths {
-		j := rand.Intn(i + 1)
-		relpaths[i], relpaths[j] = relpaths[j], relpaths[i]
-	}
-	paths := []string{}
-	root := config.Library.Root
-	if n < 0 {
-		panic("not impl yet")
-	}
-	for _, rel := range relpaths[:n] {
-		p := filepath.Join(root, rel)
-		paths = append(paths, p)
-	}
-	return paths
-}
-
-// base should always be a valid absolute path
-//
-// returns fullpaths of immediate children if join is true (otherwise basenames)
-func descend(base string, join bool) ([]string, error) {
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		return []string{}, err
-		// panic(err)
-	}
-	ch := []string{}
-	for _, e := range entries {
-		if join {
-			ch = append(ch, filepath.Join(base, e.Name()))
-		} else {
-			ch = append(ch, e.Name())
-		}
-	}
-	return ch, nil
-}
 
 type Mode int
 
@@ -119,13 +60,43 @@ func newBrowser(items []string, mode Mode) Browser {
 	}
 }
 
-func (_ Browser) Init() tea.Cmd {
-	// not sure if this is a good idea
-	return tea.ClearScreen
+func artistBrowser() Browser {
+	root := config.Library.Root
+	items, _ := descend(root, true)
+	return newBrowser(items, Artists)
+}
+
+func play(dir string) tea.Cmd {
+	mpv_args := strings.Split("--mute=no --no-audio-display --pause=no --start=0%", " ")
+	mpv_args = append(mpv_args, dir)
+	cmd := exec.Command("mpv", mpv_args...)
+
+	// // handover std streams + keyboard control to mpv
+	// // https://github.com/search?type=code&q=exec.Command(%22mpv%22
+	// // https://github.com/aynakeya/blivechat/blob/9c4a8ddddc9c5295a9a8d368ac5dab62557397c5/app/heiting/heiting.go#L136
+	// cmd.Stdout = os.Stdout
+	// cmd.Stdin = os.Stdin
+	// cmd.Stderr = os.Stderr
+	//
+	// if err := cmd.Run(); err != nil {
+	// 	panic(err)
+	// }
+
+	return tea.Sequence(
+		// if the altscreen is not used, new model is (inexplicably)
+		// rendered before (above) mpv
+		tea.EnterAltScreen,
+		tea.ExecProcess(cmd, nil),
+		tea.ExitAltScreen,
+		// rate
+		// remove from queue
+		tea.Println("rating..."),
+		tea.ClearScreen,
+	)
 }
 
 // https://github.com/antonmedv/walk/blob/ba821ed78f31e0ebd46eeef19cfe642fc1ec4330/main.go#L427
-// important: we are mutating Browser
+// note the pointer; we are mutating Browser
 
 func (b *Browser) updateSearch(msg tea.KeyMsg) {
 	if b.input == "" {
@@ -144,6 +115,13 @@ func (b *Browser) updateSearch(msg tea.KeyMsg) {
 			b.cursor = 0
 		}
 	}
+}
+
+// tea interface
+
+func (_ Browser) Init() tea.Cmd {
+	// not sure if this is needed
+	return tea.ClearScreen
 }
 
 func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
@@ -246,12 +224,12 @@ func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 					tea.ClearScreen
 
 			case Queue:
-				return newBrowser(GetQueue(10), Queue),
+				return newBrowser(getQueue(10), Queue),
 					play(selected)
 
 			case Albums:
 				if b.play { // uncommon in real use
-					return newBrowser(GetQueue(10), Queue),
+					return newBrowser(getQueue(10), Queue),
 						play(selected)
 				} else {
 					// tea.Println("queued", selected)
