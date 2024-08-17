@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 	"sync"
 
 	"github.com/BurntSushi/toml"
@@ -38,10 +39,10 @@ func init() {
 		if err != nil {
 			panic(err)
 		}
+
 		for _, v := range []string{
 			config.Discogs.Key,
 			config.Discogs.Username,
-			// TODO: check dirs exist
 			config.Library.Root,
 			config.Library.Queue,
 		} {
@@ -50,5 +51,22 @@ func init() {
 				return
 			}
 		}
+
+		for _, d := range []string{
+			config.Library.Root,
+			config.Library.Queue,
+		} {
+			i, err := os.Stat(d)
+			if err != nil {
+				panic(err)
+			}
+			if !i.IsDir() {
+				log.Fatal("not a directory:\n", d)
+			}
+
+		}
+
+		// https://github.com/lazybeaver/entropy/blob/master/shannon.go
+		// https://github.com/Xe/x/blob/master/entropy/shannon.go
 	})
 }
