@@ -9,15 +9,14 @@ import (
 // to be able to import functions from same package (need not be public), need:
 // go run *.go
 // https://stackoverflow.com/a/43953582
+//
+// to also avoid test.go files (cringe):
+// ls *.go | grep -v _test | xargs go run
+// note that this breaks stdin
 
-// discogs rate (get, put, post)
-// discogs artist
 // check resume
 
 func main() {
-	rateRelease(4319735)
-	return
-
 	if _, err := tea.NewProgram(newBrowser(getQueue(10), Queue), tea.WithAltScreen()).Run(); err != nil {
 		panic(err)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -26,7 +27,9 @@ type Browser struct {
 	mode   Mode
 	width  int
 	height int
-	play   bool
+
+	// if false, album will be queued
+	play bool
 
 	// guaranteed to be valid fullpaths
 	items   []string
@@ -66,32 +69,46 @@ func artistBrowser() Browser {
 	return newBrowser(items, Artists)
 }
 
+// https://github.com/picosh/pico/blob/4632c9cd3d7bc37c9c0c92bdc3dc8a64928237d8/tui/senpai.go#L10C1-L31C44
+
+// wrapper to call functions in a blocking manner
+type rateCmd struct{}
+
+func (c *rateCmd) Run() error {
+	rateRelease(4319735)
+	return nil
+}
+func (c *rateCmd) SetStderr(io.Writer) {}
+func (c *rateCmd) SetStdin(io.Reader)  {}
+func (c *rateCmd) SetStdout(io.Writer) {}
+
 func play(dir string) tea.Cmd {
 	mpv_args := strings.Split("--mute=no --no-audio-display --pause=no --start=0%", " ")
 	mpv_args = append(mpv_args, dir)
 	cmd := exec.Command("mpv", mpv_args...)
 
-	// // handover std streams + keyboard control to mpv
-	// // https://github.com/search?type=code&q=exec.Command(%22mpv%22
-	// // https://github.com/aynakeya/blivechat/blob/9c4a8ddddc9c5295a9a8d368ac5dab62557397c5/app/heiting/heiting.go#L136
-	// cmd.Stdout = os.Stdout
-	// cmd.Stdin = os.Stdin
-	// cmd.Stderr = os.Stderr
-	//
-	// if err := cmd.Run(); err != nil {
-	// 	panic(err)
-	// }
-
 	return tea.Sequence(
 		// if the altscreen is not used, new model is (inexplicably)
 		// rendered before (above) mpv
-		tea.EnterAltScreen,
+		// tea.EnterAltScreen,
+
 		tea.ExecProcess(cmd, nil),
-		tea.ExitAltScreen,
-		// rate
-		// remove from queue
-		tea.Println("rating..."),
-		tea.ClearScreen,
+
+		// tea.ExitAltScreen,
+		// tea.ClearScreen,
+
+		// // this func/Msg actually works (program will wait for enter 1
+		// // time), but with very bizarre behaviour (new selector is
+		// // rendered on top of prompt)
+		// func() tea.Msg {
+		// 	rateRelease(4319735)
+		// 	return nil
+		// },
+
+		tea.Exec(&rateCmd{}, nil),
+
+		// tea.ExitAltScreen,
+		// tea.ClearScreen,
 	)
 }
 
@@ -249,6 +266,8 @@ func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 func (b Browser) View() string {
 	// split screen into 2 vertical panes, with preview window on right
 	// https://github.com/charmbracelet/bubbletea/blob/master/examples/split-editors/main.go
+
+	// exec.Command("notify-send", "foo").Run()
 
 	root := config.Library.Root
 	lines := []string{}

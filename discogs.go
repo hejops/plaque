@@ -77,9 +77,13 @@ func rateRelease(id int) { // {{{
 		return
 	}
 
-	fmt.Print("rating: ")
+	// tea.Printf("rating: ")
+	fmt.Printf("rating: ")
 	var input string
 	fmt.Scanln(&input)
+	if input == "" {
+		return
+	}
 	newRating, _ := strconv.Atoi(input)
 	discogsReq(
 		urlpath,
