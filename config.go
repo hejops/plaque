@@ -1,9 +1,11 @@
 package main
 
 import (
+	"log"
 	"sync"
 
 	"github.com/BurntSushi/toml"
+	"github.com/davecgh/go-spew/spew"
 )
 
 // https://github.com/Ragnaroek/run-slacker/blob/a7a9e3618a10ab7a6c099cbb4210ee0c9af1469a/run.go#L16
@@ -35,6 +37,18 @@ func init() {
 		_, err := toml.DecodeFile("./config.toml", &config)
 		if err != nil {
 			panic(err)
+		}
+		for _, v := range []string{
+			config.Discogs.Key,
+			config.Discogs.Username,
+			// TODO: check dirs exist
+			config.Library.Root,
+			config.Library.Queue,
+		} {
+			if v == "" {
+				log.Fatal("empty fields found:\n", spew.Sdump(config))
+				return
+			}
 		}
 	})
 }
