@@ -23,12 +23,6 @@ func intRange(n int) []int {
 	return ints
 }
 
-// no error-handling
-func LibraryRoot() string {
-	// TODO: read from config file
-	return os.Getenv("MU")
-}
-
 // Select n random items from the queue file (containing relpaths), and return
 // them as fullpaths
 func GetQueue(n int) []string {
@@ -46,7 +40,7 @@ func GetQueue(n int) []string {
 		relpaths[i], relpaths[j] = relpaths[j], relpaths[i]
 	}
 	paths := []string{}
-	root := LibraryRoot()
+	root := config.Library.Root
 	if n < 0 {
 		panic("not impl yet")
 	}
@@ -137,7 +131,7 @@ func (b *Browser) updateSearch(msg tea.KeyMsg) {
 	if b.input == "" {
 		b.matches = intRange(len(b.items))
 	} else {
-		root := LibraryRoot()
+		root := config.Library.Root
 		matchIdxs := []int{}
 		for i, item := range b.items {
 			rel, _ := filepath.Rel(root, item)
@@ -278,7 +272,7 @@ func (b Browser) View() string {
 	// split screen into 2 vertical panes, with preview window on right
 	// https://github.com/charmbracelet/bubbletea/blob/master/examples/split-editors/main.go
 
-	root := LibraryRoot()
+	root := config.Library.Root
 	lines := []string{}
 
 	for i, idx := range b.matches { //[b.offset:] {

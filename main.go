@@ -56,7 +56,7 @@ func play(dir string) tea.Cmd {
 }
 
 func artistBrowser() Browser {
-	root := LibraryRoot()
+	root := config.Library.Root
 	artists, err := os.ReadDir(root)
 	if err != nil {
 		panic(err)
@@ -70,13 +70,10 @@ func artistBrowser() Browser {
 }
 
 func main() {
-	// fmt.Println(tea.KeyPgDown.String())
-	// return
-
-	// if _, err := tea.NewProgram(newBrowser(GetQueue(10), Queue), tea.WithAltScreen()).Run(); err != nil {
-	// 	panic(err)
-	// }
-	// return
+	if _, err := tea.NewProgram(newBrowser(GetQueue(10), Queue), tea.WithAltScreen()).Run(); err != nil {
+		panic(err)
+	}
+	return
 
 	if _, err := tea.NewProgram(artistBrowser()).Run(); err != nil {
 		panic(err)

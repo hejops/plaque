@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 )
 
 const API_PREFIX = "https://api.discogs.com"
@@ -20,8 +19,7 @@ func discogsGet(urlpath string) string {
 		panic(err)
 	}
 
-	token := os.Getenv("DISCOGS_TOKEN") // TODO: read from config
-	req.Header.Add("Authorization", token)
+	req.Header.Add("Authorization", config.Discogs.Key)
 	resp, err := client.Do(req)
 	defer resp.Body.Close()
 	if err != nil {
@@ -37,8 +35,7 @@ func discogsGet(urlpath string) string {
 }
 
 func rateRelease(id int) {
-	username := os.Getenv("DISCOGS_USERNAME") // TODO: read from config
-	url := fmt.Sprintf("releases/%d/rating/%s", id, username)
+	url := fmt.Sprintf("releases/%d/rating/%s", id, config.Discogs.Username)
 	resp := discogsGet(url)
 	fmt.Println(resp)
 
