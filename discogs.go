@@ -1,26 +1,37 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 )
 
 const ApiPrefix = "https://api.discogs.com"
 
-func discogsGet(urlpath string) string {
-	client := &http.Client{
-		//
-	}
+// HEADERS = {"Cache-Control": "no-cache"}
 
-	url := fmt.Sprintf("%s/%s", ApiPrefix, urlpath)
-	req, err := http.NewRequest("GET", url, nil)
+func addKey(req *http.Request) {
+	req.Header.Add("Authorization", "Discogs token="+config.Discogs.Key)
+}
+
+func discogsGet(urlpath string) []byte {
+	_url, err := url.JoinPath(ApiPrefix, urlpath)
 	if err != nil {
 		panic(err)
 	}
 
-	req.Header.Add("Authorization", config.Discogs.Key)
-	resp, err := client.Do(req)
+	req, err := http.NewRequest("GET", _url, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	// addKey + http.DefaultClient.Do can be refactored if needed
+	addKey(req)
+	resp, err := http.DefaultClient.Do(req)
 	defer resp.Body.Close()
 	if err != nil {
 		panic(err)
@@ -30,33 +41,89 @@ func discogsGet(urlpath string) string {
 	if err != nil {
 		panic(err)
 	}
-	// TODO: return plain struct (don't deserialise)
-	return string(body)
+
+	return body
+}
+
+func discogsPut(urlpath string, data map[string]any) {
+	_url, err := url.JoinPath(ApiPrefix, urlpath)
+	if err != nil {
+		panic(err)
+	}
+
+	// map -> []byte -> bytes.Buffer
+	b, err := json.Marshal(data)
+	if err != nil {
+		panic(err)
+	}
+
+	// https://stackoverflow.com/a/24455606
+	req, err := http.NewRequest("PUT", _url, bytes.NewBuffer(b))
+	if err != nil {
+		panic(err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	addKey(req)
+	if resp, err := http.DefaultClient.Do(req); err != nil {
+		panic(err)
+	} else if resp.StatusCode != 201 {
+		panic(resp)
+	}
 }
 
 func rateRelease(id int) {
-	url := fmt.Sprintf("releases/%d/rating/%s", id, config.Discogs.Username)
-	resp := discogsGet(url)
-	fmt.Println(resp)
+	//
 
-	// put
-	// data = json.dumps(  # dict -> json str
-	//     {
-	//         "username": dc.USERNAME,
-	//         "release_id": release_id,
-	//         "rating": int(rating),
-	//     }
-	// )
+	// "releases/{id}/rating/{username}"
+	urlpath, _ := url.JoinPath(
+		"releases",
+		strconv.Itoa(id),
+		"rating",
+		config.Discogs.Username,
+	)
+	resp := discogsGet(urlpath)
+	var currentRating map[string]any
+	json.Unmarshal(resp, &currentRating)
+	if int(currentRating["rating"].(float64)) != 0 {
+		fmt.Println("already rated:", id)
+		return
+	}
 
-	// # add to collection -- must be done last to prevent duplicate additions
-	// # (post is not idempotent)
-	// # https://www.discogs.com/developers#page:user-collection,header:user-collection-add-to-collection-folder
-	// response = json.loads(
-	//     requests.post(
-	//         url=dc.API_PREFIX
-	//         + f"/users/{dc.USERNAME}/collection/folders/1/releases/{release_id}",
-	//         headers=dc.HEADERS,
-	//         timeout=3,
-	//     ).content
-	// )
+	fmt.Print("rating: ")
+	var input string
+	fmt.Scanln(&input)
+	newRating, _ := strconv.Atoi(input)
+	discogsPut(
+		urlpath,
+		map[string]any{
+			"username":   config.Discogs.Username,
+			"release_id": id,
+			"rating":     newRating,
+		},
+	)
+
+	postUrl, err := url.JoinPath(
+		ApiPrefix,
+		"users",
+		config.Discogs.Username,
+		"collection/folders/1/releases",
+		strconv.Itoa(id),
+	)
+	if err != nil {
+		panic(err)
+	}
+	req, err := http.NewRequest("POST", postUrl, nil)
+	if err != nil {
+		panic(err)
+	}
+	addKey(req)
+	if resp, err := http.DefaultClient.Do(req); err != nil {
+		panic(err)
+	} else if resp.StatusCode != 201 {
+		panic(resp)
+	}
+	// fmt.Println("OK")
 }
+
+// TODO: relpath -> search -> primary release id -> rate

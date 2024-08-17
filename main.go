@@ -15,6 +15,9 @@ import (
 // check resume
 
 func main() {
+	rateRelease(4319735)
+	return
+
 	if _, err := tea.NewProgram(newBrowser(getQueue(10), Queue), tea.WithAltScreen()).Run(); err != nil {
 		panic(err)
 	}
@@ -25,11 +28,6 @@ func main() {
 	}
 
 	fmt.Println("end")
-
-	// TODO: relpath -> search -> primary release id -> rate
-
-	// discogsGet(4319735)
-	// rateRelease(4319735)
 
 	// _ = p
 }
