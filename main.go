@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -14,10 +12,15 @@ import (
 // ls *.go | grep -v _test | xargs go run
 // note that this breaks stdin
 
-// check resume
+// TODO: check resume
+// TODO: cli flags
+// TODO: tui main menu
 
 func main() {
-	if _, err := tea.NewProgram(newBrowser(getQueue(10), Queue), tea.WithAltScreen()).Run(); err != nil {
+	if _, err := tea.NewProgram(
+		newBrowser(getQueue(10), Queue),
+		// tea.WithAltScreen(),
+	).Run(); err != nil {
 		panic(err)
 	}
 	return
@@ -25,8 +28,4 @@ func main() {
 	if _, err := tea.NewProgram(artistBrowser()).Run(); err != nil {
 		panic(err)
 	}
-
-	fmt.Println("end")
-
-	// _ = p
 }

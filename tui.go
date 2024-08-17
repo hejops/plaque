@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -69,49 +68,6 @@ func artistBrowser() Browser {
 	return newBrowser(items, Artists)
 }
 
-// https://github.com/picosh/pico/blob/4632c9cd3d7bc37c9c0c92bdc3dc8a64928237d8/tui/senpai.go#L10C1-L31C44
-
-// wrapper to call functions in a blocking manner
-type rateCmd struct{}
-
-func (c *rateCmd) Run() error {
-	rateRelease(4319735)
-	return nil
-}
-func (c *rateCmd) SetStderr(io.Writer) {}
-func (c *rateCmd) SetStdin(io.Reader)  {}
-func (c *rateCmd) SetStdout(io.Writer) {}
-
-func play(dir string) tea.Cmd {
-	mpv_args := strings.Split("--mute=no --no-audio-display --pause=no --start=0%", " ")
-	mpv_args = append(mpv_args, dir)
-	cmd := exec.Command("mpv", mpv_args...)
-
-	return tea.Sequence(
-		// if the altscreen is not used, new model is (inexplicably)
-		// rendered before (above) mpv
-		// tea.EnterAltScreen,
-
-		tea.ExecProcess(cmd, nil),
-
-		// tea.ExitAltScreen,
-		// tea.ClearScreen,
-
-		// // this func/Msg actually works (program will wait for enter 1
-		// // time), but with very bizarre behaviour (new selector is
-		// // rendered on top of prompt)
-		// func() tea.Msg {
-		// 	rateRelease(4319735)
-		// 	return nil
-		// },
-
-		tea.Exec(&rateCmd{}, nil),
-
-		// tea.ExitAltScreen,
-		// tea.ClearScreen,
-	)
-}
-
 // https://github.com/antonmedv/walk/blob/ba821ed78f31e0ebd46eeef19cfe642fc1ec4330/main.go#L427
 // note the pointer; we are mutating Browser
 
@@ -134,7 +90,7 @@ func (b *Browser) updateSearch(msg tea.KeyMsg) {
 	}
 }
 
-// tea interface
+// tea.Model interface
 
 func (_ Browser) Init() tea.Cmd {
 	// not sure if this is needed
@@ -142,7 +98,6 @@ func (_ Browser) Init() tea.Cmd {
 }
 
 func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
-	// tea.ClearScreen()
 
 	switch msg := msg.(type) {
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"math"
 	"os"
 	"sync"
 
@@ -54,7 +55,7 @@ func init() {
 
 		for _, d := range []string{
 			config.Library.Root,
-			config.Library.Queue,
+			// config.Library.Queue,
 		} {
 			i, err := os.Stat(d)
 			if err != nil {
@@ -66,7 +67,22 @@ func init() {
 
 		}
 
-		// https://github.com/lazybeaver/entropy/blob/master/shannon.go
 		// https://github.com/Xe/x/blob/master/entropy/shannon.go
+		l := len(config.Discogs.Key)
+
+		charFreq := make(map[rune]float64)
+		for _, i := range config.Discogs.Key {
+			charFreq[i]++
+		}
+
+		var sum float64
+		for _, c := range charFreq {
+			f := c / float64(l)
+			sum += f * math.Log2(f)
+		}
+
+		if int(math.Ceil(sum*-1))*l < 200 {
+			panic("invalid key?")
+		}
 	})
 }
