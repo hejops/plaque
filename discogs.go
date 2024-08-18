@@ -180,10 +180,15 @@ type SearchResult struct {
 
 // if r.Results contains a master release (correctness is not checked), returns
 // the id of the Primary version of the first master. otherwise returns id of
-// first result.
+// first result (as it is probably still meaningful to callers).
+//
+// if no results are found, returns 0.
 //
 // in my use case, I have never actually needed to use the master id.
 func (r *SearchResult) Primary() int {
+	if len(r.Results) == 0 {
+		return 0
+	}
 	for i, res := range r.Results {
 		if i > config.Discogs.MaxResults {
 			break
@@ -223,6 +228,7 @@ func discogsSearch(artist string, album string) SearchResult {
 		"/database/search",
 		"GET",
 		// compiler does -not- allow map[string]string, which is silly
+		// TODO: sanitize params (ascii only)
 		map[string]any{"artist": artist, "release_title": album},
 	)
 	defer resp.Body.Close()
