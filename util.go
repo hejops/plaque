@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,25 +24,23 @@ func intRange(n int) []int {
 // Select n random items from the queue file (containing relpaths), and return
 // them as fullpaths
 func getQueue(n int) []string {
+	if n < 0 {
+		panic("not impl yet")
+	}
+
 	b, err := os.ReadFile(config.Library.Queue)
 	if err != nil {
 		panic(err)
 	}
 	relpaths := strings.Split(string(b), "\n")
+
 	// TODO: split off sampling
-	// TODO: use rand.Shuffle instead?
-	// https://stackoverflow.com/a/12267471
-	for i := range relpaths {
-		j := rand.Intn(i + 1)
-		relpaths[i], relpaths[j] = relpaths[j], relpaths[i]
-	}
 	paths := []string{}
-	root := config.Library.Root
-	if n < 0 {
-		panic("not impl yet")
-	}
-	for _, rel := range relpaths[:n] {
-		p := filepath.Join(root, rel)
+	// for _, rel := range relpaths[:n] {
+	idxs := rand.Perm(len(relpaths) - 1)
+	for _, idx := range idxs[:n] {
+		rel := relpaths[idx]
+		p := filepath.Join(config.Library.Root, rel)
 		paths = append(paths, p)
 	}
 	return paths
