@@ -14,8 +14,6 @@ func TestDiscogs(t *testing.T) {
 	assert.Equal(t, discogsReq("/releases/4319735", "GET", nil).StatusCode, 200)
 
 	sr := discogsSearch("Metallica", "Ride the Lightning")
-	firstMaster := sr.Master()
-	assert.Equal(t, firstMaster.Id, 6440)
-	pri := firstMaster.Primary
-	assert.Equal(t, pri, 377464)
+	// assert.Equal(t, firstMaster.Id, 6440)
+	assert.Equal(t, sr.Primary(), 377464)
 }

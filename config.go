@@ -18,8 +18,9 @@ type Config struct {
 }
 
 type Discogs struct {
-	Username string `toml:"username"`
-	Key      string `toml:"key"`
+	Username   string `toml:"username"`
+	Key        string `toml:"key"`
+	MaxResults int    `toml:"max_results"`
 }
 
 type Library struct {
@@ -49,23 +50,27 @@ func init() {
 		} {
 			if v == "" {
 				log.Fatal("empty fields found:\n", spew.Sdump(config))
-				return
 			}
 		}
 
-		for _, d := range []string{
+		// TODO: check int values, set to sane defaults
+		if config.Discogs.MaxResults == 0 {
+			config.Discogs.MaxResults = 10
+		}
+
+		for _, p := range []string{
 			config.Library.Root,
-			// config.Library.Queue,
+			config.Library.Queue,
 		} {
-			i, err := os.Stat(d)
-			if err != nil {
-				panic(err)
+			_, err := os.Stat(p)
+			if err != nil { //|| !i.IsDir() {
+				log.Fatal("not a directory: ", p)
 			}
-			if !i.IsDir() {
-				log.Fatal("not a directory:\n", d)
-			}
-
 		}
+
+		// if _, err := os.ReadFile(config.Library.Queue); err != nil {
+		// 	panic("no queue file")
+		// }
 
 		// https://github.com/Xe/x/blob/master/entropy/shannon.go
 		l := len(config.Discogs.Key)

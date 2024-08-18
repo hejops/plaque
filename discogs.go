@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 )
 
 // discogs rate (get, put, post)
@@ -168,20 +169,29 @@ type SearchResult struct {
 	Results []SearchRelease
 }
 
-func (r *SearchResult) Master() Master {
-	// iterate through all results
-	// cases:
-	// 1. master (Type) -- return
-	// 2. release with master (MasterId!=0)
-	// 3. release w/o master -- return 1st r.Id
-	var m Master
-	for _, r := range r.Results {
-		if r.ReleaseType == "master" {
-			resp := discogsReq("/masters/"+strconv.Itoa(r.Id), "GET", nil)
-			return deserialize(resp, Master{})
+// if r.Results contains a master release (correctness is not checked), returns
+// the id of the Primary version of the first master. otherwise returns id of
+// first result.
+//
+// in my use case, I have never actually needed to use the master id.
+func (r *SearchResult) Primary() int {
+	for i, res := range r.Results {
+		if i > config.Discogs.MaxResults {
+			break
 		}
+
+		if res.MasterId == 0 {
+			time.Sleep(time.Second)
+			continue
+		}
+
+		return deserialize(
+			// TODO: should use joinpath, but i'm lazy to handle errors
+			discogsReq("/masters/"+strconv.Itoa(res.MasterId), "GET", nil),
+			Master{},
+		).Primary
 	}
-	return m
+	return r.Results[0].Id
 }
 
 type Master struct {

@@ -1,4 +1,6 @@
 // playback and queue management
+//
+// for scrobbling, consider https://github.com/Feqzz/mpv-lastfm-scrobbler
 
 package main
 
