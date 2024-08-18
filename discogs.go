@@ -113,23 +113,32 @@ func rateRelease(id int) { // {{{
 		return
 	}
 
-	// tea.Printf("rating: ")
-	fmt.Printf("rating: ")
+	fmt.Print("rating: ")
 	var input string
-	fmt.Scanln(&input)
-	if input == "" {
+	fmt.Scanln(&input) // can only exit with ctrl+\, not ctrl+c
+
+	switch input {
+
+	case "1", "2", "3", "4", "5":
+		newRating, _ := strconv.Atoi(input)
+		discogsReq(
+			urlpath,
+			"PUT",
+			map[string]any{
+				"username":   config.Discogs.Username,
+				"release_id": id,
+				"rating":     newRating,
+			},
+		)
+
+	case "":
 		return
+
+	default:
+		fmt.Println("invalid:", input)
+		return
+
 	}
-	newRating, _ := strconv.Atoi(input)
-	discogsReq(
-		urlpath,
-		"PUT",
-		map[string]any{
-			"username":   config.Discogs.Username,
-			"release_id": id,
-			"rating":     newRating,
-		},
-	)
 
 	postUrlPath, err := url.JoinPath(
 		"users",
