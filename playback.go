@@ -5,8 +5,10 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,14 +17,40 @@ import (
 // https://github.com/picosh/pico/blob/4632c9cd3d7bc37c9c0c92bdc3dc8a64928237d8/tui/senpai.go#L10
 
 // wrapper to call functions in a blocking manner
-type rateCmd struct{}
+type rateCmd struct {
+	dir string // fullpath
+}
 
 // required methods for tea.ExecCommand
 
 func (c *rateCmd) Run() error {
 	// if resume, return early
-	rateRelease(4319735)
+
+	relpath, err := filepath.Rel(config.Library.Root, c.dir)
+	if err != nil {
+		return err
+	}
+	artist, album := filepath.Split(relpath)
+	// TODO: artist endswith ) -> remove translation
+	if strings.HasSuffix(album, ")") { // " (YYYY)"
+		album = album[:len(album)-7]
+	}
+	// if strings.HasSuffix(album, "]") { // " [performer, ...]"
+	// 	album = album[:len(album)-7]
+	// }
+	exec.Command("notify-send", artist).Run()
+	exec.Command("notify-send", album).Run()
+
+	res := discogsSearch(artist, album)
+	pri := res.Primary()
+	if pri > 0 {
+		fmt.Println(pri)
+		rateRelease(pri)
+		// rateArtist(artist)
+	}
+
 	// TODO: remove from queue
+
 	return nil
 }
 func (c *rateCmd) SetStderr(io.Writer) {}
@@ -38,9 +66,7 @@ func play(dir string) tea.Cmd {
 		// if the altscreen is not used, new model is (inexplicably)
 		// rendered before (above) mpv
 		// tea.EnterAltScreen,
-
 		tea.ExecProcess(cmd, nil),
-
 		// tea.ExitAltScreen,
 		// tea.ClearScreen,
 
@@ -53,7 +79,7 @@ func play(dir string) tea.Cmd {
 		// 	return nil
 		// },
 
-		tea.Exec(&rateCmd{}, nil),
+		tea.Exec(&rateCmd{dir: dir}, nil),
 
 		// tea.ExitAltScreen,
 		// tea.ClearScreen,

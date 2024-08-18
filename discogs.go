@@ -89,6 +89,7 @@ func discogsReq(urlpath string, method string, data map[string]any) *http.Respon
 
 // TODO: turn into Release method
 
+// does nothing if release already rated
 func rateRelease(id int) { // {{{
 	//
 
@@ -153,12 +154,12 @@ func rateRelease(id int) { // {{{
 	discogsReq(postUrlPath, "POST", nil)
 } // }}}
 
-// TODO: relpath -> search -> primary release id -> rate
-
 // remember: all fields must be uppercase, and any fields in camelcase must be
 // marked in order to be parsed
 
-type SearchRelease struct {
+// this struct is shared across several contexts: search results, artist
+// releases, and actual releases
+type Release struct {
 	Id          int
 	ReleaseType string `json:"type"` // 'release' or 'master'
 
@@ -168,18 +169,38 @@ type SearchRelease struct {
 	Title       string
 	Year        string // may be empty
 
-	Genre []string
+	// search-only (?)
 
+	Genre     []string
 	Community map[string]int
+
+	// artist-only
+
+	Artist string
+	Format string // ", "-delimited
+	Label  string
+	Role   string // typically "Main"
+	Stats  map[string]map[string]int
 }
 
 type SearchResult struct {
-	// pagination map[string]any
-	Results []SearchRelease
+	Pagination map[string]any
+	Results    []Release
+}
+
+// releases
+func discogsSearch(artist string, album string) SearchResult {
+	resp := discogsReq(
+		"/database/search",
+		"GET",
+		// compiler does -not- allow map[string]string, which is silly
+		map[string]any{"artist": alnum(artist), "release_title": alnum(album)},
+	)
+	return deserialize(resp, SearchResult{})
 }
 
 // if r.Results contains a master release (correctness is not checked), returns
-// the id of the Primary version of the first master. otherwise returns id of
+// the id of the primary version of the first master. otherwise returns id of
 // first result (as it is probably still meaningful to callers).
 //
 // if no results are found, returns 0.
@@ -199,45 +220,65 @@ func (r *SearchResult) Primary() int {
 			continue
 		}
 
+		// merge into Release, if necessary
+		// type Master struct {
+		// 	Id      int
+		// 	Primary int `json:"main_release"`
+		//
+		// 	// LowestPrice float32
+		// 	Title       string
+		// 	Uri         string
+		// 	VersionsUrl string `json:"versions_url"`
+		// 	Year        string
+		//
+		// 	Artists   []map[string]any
+		// 	Genre     []string
+		// 	Tracklist []map[string]any
+		// }
+
 		return deserialize(
 			// TODO: should use joinpath, but i'm lazy to handle errors
 			discogsReq("/masters/"+strconv.Itoa(res.MasterId), "GET", nil),
-			Master{},
+			// Master{},
+			struct {
+				Id      int
+				Primary int `json:"main_release"`
+			}{},
 		).Primary
 	}
 	return r.Results[0].Id
 }
 
-type Master struct {
-	Id      int
-	Primary int `json:"main_release"`
-
-	// LowestPrice float32
-	Title       string
-	Uri         string
-	VersionsUrl string `json:"versions_url"`
-	Year        string
-
-	Artists   []map[string]any
-	Genre     []string
-	Tracklist []map[string]any
+type Artist struct {
+	Id          int
+	Name        string          `json:"title"`
+	ResourceUrl string          `json:"resource_url"`
+	UserData    map[string]bool `json:"user_data"` // in_collection
 }
 
-func discogsSearch(artist string, album string) SearchResult {
+func discogsSearchArtist(artist string) []Artist {
 	resp := discogsReq(
 		"/database/search",
 		"GET",
-		// compiler does -not- allow map[string]string, which is silly
-		// TODO: sanitize params (ascii only)
-		map[string]any{"artist": artist, "release_title": album},
+		map[string]any{"q": alnum(artist), "type": "artist"},
 	)
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
-	}
+	return deserialize(resp, struct {
+		Results []Artist
+	}{}).Results
+}
 
-	var data SearchResult
-	json.Unmarshal(body, &data)
-	return data
+func (a *Artist) Releases() []Release {
+	// /artists/{self.a_id}/releases
+	urlpath, _ := url.JoinPath(
+		"artists",
+		strconv.Itoa(a.Id),
+		"releases",
+	)
+
+	resp := discogsReq(urlpath, "GET", nil)
+	return deserialize(resp, struct {
+		Releases []Release
+	}{}).Releases
+
+	// sort=year&per_page={self.per_page}&page={self.page}
 }

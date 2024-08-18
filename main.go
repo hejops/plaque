@@ -17,9 +17,11 @@ import (
 // TODO: tui main menu
 
 func main() {
+	discogsSearchArtist("metallica")[0].Releases()
+	return
 	if _, err := tea.NewProgram(
 		newBrowser(getQueue(10), Queue),
-		// tea.WithAltScreen(),
+		tea.WithAltScreen(),
 	).Run(); err != nil {
 		panic(err)
 	}

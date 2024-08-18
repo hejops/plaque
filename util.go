@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 const QueuedSymbol = "[Q]"
@@ -91,4 +92,14 @@ func deserialize[T any](resp *http.Response, t T) T {
 	var data T
 	json.Unmarshal(body, &data)
 	return data
+}
+
+func alnum(s string) string {
+	var out []rune
+	for _, c := range s {
+		if unicode.IsLetter(c) || unicode.IsNumber(c) || c == ' ' {
+			out = append(out, c)
+		}
+	}
+	return string(out)
 }
