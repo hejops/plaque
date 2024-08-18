@@ -1,7 +1,11 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"math/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +30,7 @@ func getQueue(n int) []string {
 	}
 	relpaths := strings.Split(string(b), "\n")
 	// TODO: split off sampling
+	// TODO: use rand.Shuffle instead?
 	// https://stackoverflow.com/a/12267471
 	for i := range relpaths {
 		j := rand.Intn(i + 1)
@@ -61,4 +66,31 @@ func descend(base string, join bool) ([]string, error) {
 		}
 	}
 	return ch, nil
+}
+
+// pretty-print arbitrary http (json) response without needing to know its
+// schema
+func debugResponse(resp *http.Response) {
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
+	}
+	var data map[string]any
+	json.Unmarshal(body, &data)
+	x, _ := json.MarshalIndent(data, "", "    ")
+	fmt.Println(string(x))
+}
+
+// hacky function that uses generics (v1.18) to deserialize a http.Response
+// into an arbitrary target type T. simply pass a zeroed t
+func deserialize[T any](resp *http.Response, t T) T {
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
+	}
+	var data T
+	json.Unmarshal(body, &data)
+	return data
 }
