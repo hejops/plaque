@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -24,13 +23,13 @@ const (
 
 type Browser struct {
 	mode   Mode
-	width  int
-	height int
+	width  int // calculated dynamically (?)
+	height int // calculated dynamically (?)
 
 	// if false, album will be queued
 	play bool
 
-	// guaranteed to be valid fullpaths
+	// should be valid relpaths
 	items   []string
 	offset  int
 	cursor  int
@@ -41,12 +40,12 @@ type Browser struct {
 	queue map[string]any
 }
 
-// all items must be valid fullpaths
+// all items must be valid relpaths (relative to root)
 func newBrowser(items []string, mode Mode) Browser {
 	// TODO: only pass mode and optional artist arg (items can be
 	// auto-generated for Queue and Artists)
 
-	info, err := os.Stat(items[0])
+	info, err := os.Stat(filepath.Join(config.Library.Root, items[0]))
 	if err != nil {
 		panic(err)
 	}
@@ -63,8 +62,7 @@ func newBrowser(items []string, mode Mode) Browser {
 }
 
 func artistBrowser() Browser {
-	root := config.Library.Root
-	items, _ := descend(root, true)
+	items, _ := descend(config.Library.Root)
 	return newBrowser(items, Artists)
 }
 
@@ -72,13 +70,15 @@ func artistBrowser() Browser {
 // note the pointer; we are mutating Browser
 
 func (b *Browser) updateSearch(msg tea.KeyMsg) {
-	if b.input == "" {
+	switch b.input {
+	case "":
 		b.matches = intRange(len(b.items))
-	} else {
-		root := config.Library.Root
-		matchIdxs := []int{}
-		for i, item := range b.items {
-			rel, _ := filepath.Rel(root, item)
+	default:
+		var matchIdxs []int
+		for i, rel := range b.items {
+			// // this -should- always work...
+			// rel, _ := filepath.Rel(config.Library.Root, item)
+			// TODO: if b.input has ' ', split and match each word
 			if strings.Contains(strings.ToLower(rel), b.input) {
 				matchIdxs = append(matchIdxs, i)
 			}
@@ -90,7 +90,7 @@ func (b *Browser) updateSearch(msg tea.KeyMsg) {
 	}
 }
 
-// tea.Model interface
+// tea.Model interface; the required methods cannot use pointer receivers
 
 func (_ Browser) Init() tea.Cmd {
 	// not sure if this is needed
@@ -102,7 +102,7 @@ func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 	switch msg := msg.(type) {
 
 	// https://github.com/charmbracelet/bubbletea/discussions/818#discussioncomment-6914769
-	case tea.WindowSizeMsg:
+	case tea.WindowSizeMsg: // only triggered when window resized?
 		b.width = msg.Width
 		b.height = msg.Height
 
@@ -125,7 +125,7 @@ func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 			b.updateSearch(msg)
 			return b, nil
 
-		case "ctrl+c", "esc":
+		case "ctrl+c", "esc", "ctrl+\\":
 			// os.Exit(0) // ungraceful exit
 			// return nil, tea.Quit // bad pointer
 			return b, tea.Quit // graceful exit
@@ -150,13 +150,10 @@ func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 			b.cursor = 0
 			b.offset += b.height
 
-			// // exec.Command("notify-send", strconv.Itoa(len(b.matches))).Run()
-			// // exec.Command("notify-send", strconv.Itoa(b.cursor)).Run()
 			// if b.cursor > b.height-1 {
 			// 	// b.cursor = len(b.matches) - 1
 			// 	// b.offset = b.cursor //- b.height
 			// 	b.offset = b.height
-			// 	exec.Command("notify-send", strconv.Itoa(b.offset)).Run()
 			// 	// b.cursor = 0
 			// }
 			// // return b, nil
@@ -166,6 +163,7 @@ func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 			if b.cursor > len(b.matches)-1 {
 				b.cursor = 0
 			}
+
 			// if b.cursor > b.height {
 			// 	b.offset = b.cursor - b.height
 			// }
@@ -173,46 +171,49 @@ func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 		// https://github.com/antonmedv/walk/blob/ba821ed78f31e0ebd46eeef19cfe642fc1ec4330/main.go#L259 (?)
 		case "enter":
 
-			if b.cursor > len(b.matches) {
-				return b, nil
-			}
-			idx := b.matches[b.cursor]
-			selected := b.items[idx]
+			// if b.cursor > len(b.matches) {
+			// 	return b, nil
+			// }
+			// idx := b.matches[b.cursor]
+			sel := b.items[b.matches[b.cursor]]
 
 			switch b.mode {
 			case Artists:
-				items, err := descend(selected, true)
-				exec.Command("notify-send", items[0]).Run()
+				albums, err := descend(filepath.Join(config.Library.Root, sel))
+				var relpaths []string
+				for _, alb := range albums {
+					relpaths = append(relpaths, filepath.Join(sel, alb))
+				}
 				if err != nil {
 					panic(err)
 				}
-				nb := newBrowser(items, Albums)
+				nb := newBrowser(relpaths, Albums)
 
+				// init window correctly; a "recursively"
+				// spawned Browser leaves b.height zeroed!
+				nb.height = b.height
+				nb.width = b.width
+
+				// TODO: set .queue
 				// q := make(map[string]any)
 				// GetQueue(-1)
 				// nb.queue = q
 
-				return nb,
-					tea.ClearScreen
+				return nb, tea.ClearScreen
 
 			case Queue:
-				return newBrowser(getQueue(10), Queue),
-					play(selected)
+				return newBrowser(getQueue(10), Queue), play(sel)
 
 			case Albums:
 				if b.play { // uncommon in real use
-					return newBrowser(getQueue(10), Queue),
-						play(selected)
+					return newBrowser(getQueue(10), Queue), play(sel)
 				} else {
 					// tea.Println("queued", selected)
 					// TODO: append to queue file
-					return b,
-						tea.Sequence(tea.ClearScreen, tea.Quit)
+					return b, tea.Sequence(tea.ClearScreen, tea.Quit)
 				}
 			}
-
 		}
-
 	}
 
 	return b, nil
@@ -222,15 +223,13 @@ func (b Browser) View() string {
 	// split screen into 2 vertical panes, with preview window on right
 	// https://github.com/charmbracelet/bubbletea/blob/master/examples/split-editors/main.go
 
-	// exec.Command("notify-send", "foo").Run()
-
-	root := config.Library.Root
 	lines := []string{}
 
-	for i, idx := range b.matches { //[b.offset:] {
+	// log.Println(b.cursor)
+
+	for i, idx := range b.matches {
 
 		if i < b.offset {
-			// exec.Command("notify-send", strconv.Itoa(i)).Run()
 			continue
 		}
 
@@ -240,12 +239,10 @@ func (b Browser) View() string {
 			cursor = ">"
 		}
 
-		// exec.Command("notify-send", strconv.Itoa(idx)).Run()
 		item := b.items[idx] // idx is the actual index that points to the item
-
 		var base string
 		if b.mode == Queue {
-			base, _ = filepath.Rel(root, item)
+			base = item
 		} else {
 			base = path.Base(item)
 		}
@@ -265,12 +262,16 @@ func (b Browser) View() string {
 		if b.width > 0 && len(line) > b.width/2 {
 			line = line[:b.width/2] + "..."
 		}
+
+		// log.Println(i, idx, item, line)
 		lines = append(lines, line)
 
-		if i > b.height-2 {
+		// why -3? not sure...
+		if i > b.height-3 {
 			break
 		}
 	}
+	// log.Println(len(lines), "lines, height", b.height)
 	left := strings.Join(lines, "\n")
 	// return left
 	// sep := strings.Repeat(" │ \n", max(0, b.height-1))
@@ -278,8 +279,8 @@ func (b Browser) View() string {
 	var s string
 	if len(b.matches) > 0 {
 		sel := b.items[b.matches[b.cursor]]
-		previewItems, err := descend(sel, false)
-		// exec.Command("notify-send", fmt.Sprintf("%v", previewItems)).Run()
+		p := filepath.Join(config.Library.Root, sel)
+		previewItems, err := descend(p)
 		if err != nil {
 			previewItems = []string{"error"}
 		} else if b.height > 0 && len(previewItems) > b.height {

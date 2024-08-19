@@ -4,11 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
 	"unicode"
 )
 
@@ -22,35 +19,10 @@ func intRange(n int) []int {
 	return ints
 }
 
-// Select n random items from the queue file (containing relpaths), and return
-// them as fullpaths
-func getQueue(n int) []string {
-	if n < 0 {
-		panic("not impl yet")
-	}
-
-	b, err := os.ReadFile(config.Library.Queue)
-	if err != nil {
-		panic(err)
-	}
-	relpaths := strings.Split(string(b), "\n")
-
-	// TODO: split off sampling
-	paths := []string{}
-	// for _, rel := range relpaths[:n] {
-	idxs := rand.Perm(len(relpaths) - 1)
-	for _, idx := range idxs[:n] {
-		rel := relpaths[idx]
-		p := filepath.Join(config.Library.Root, rel)
-		paths = append(paths, p)
-	}
-	return paths
-}
-
 // base should always be a valid absolute path
 //
-// returns fullpaths of immediate children if join is true (otherwise basenames)
-func descend(base string, join bool) ([]string, error) {
+// returns basenames of immediate children
+func descend(base string) ([]string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		return []string{}, err
@@ -58,11 +30,7 @@ func descend(base string, join bool) ([]string, error) {
 	}
 	ch := []string{}
 	for _, e := range entries {
-		if join {
-			ch = append(ch, filepath.Join(base, e.Name()))
-		} else {
-			ch = append(ch, e.Name())
-		}
+		ch = append(ch, e.Name())
 	}
 	return ch, nil
 }
@@ -102,4 +70,20 @@ func alnum(s string) string {
 		}
 	}
 	return string(out)
+}
+
+// If target is not found in slice, slice is returned unchanged.
+//
+// Warning: for performance, order is not preserved!
+func remove[T comparable](slice []T, target T) []T {
+	for i, item := range slice {
+		if item == target {
+			// swap last item with target, to prevent costly
+			// shifting of items
+			// https://stackoverflow.com/a/37335777
+			slice[i] = slice[len(slice)-1]
+			return slice[:len(slice)-1]
+		}
+	}
+	return slice
 }
