@@ -138,12 +138,14 @@ func discogsSearch(artist string, album string) SearchResult {
 // the id of the primary version of the first master. otherwise returns id of
 // first result (as it is probably still meaningful to callers).
 //
-// if no results are found, returns 0.
+// if no results are found, returns empty Release (Id = 0); callers should
+// check Release.Id
 //
 // in my use case, I have never actually needed to use the master id.
-func (r *SearchResult) Primary() int {
+func (r *SearchResult) Primary() Release {
 	if len(r.Results) == 0 {
-		return 0
+		// return 0
+		return Release{}
 	}
 	for i, res := range r.Results {
 		if i > config.Discogs.MaxResults {
@@ -174,14 +176,14 @@ func (r *SearchResult) Primary() int {
 		return deserialize(
 			// TODO: should use joinpath, but i'm lazy to handle errors
 			discogsReq("/masters/"+strconv.Itoa(res.MasterId), "GET", nil),
-			// Master{},
-			struct {
-				Id      int
-				Primary int `json:"main_release"`
-			}{},
-		).Primary
+			Release{},
+			// struct {
+			// 	Id      int
+			// 	Primary int `json:"main_release"`
+			// }{},
+		) //.Primary
 	}
-	return r.Results[0].Id
+	return r.Results[0] //.Id
 }
 
 // does nothing if release already rated

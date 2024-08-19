@@ -101,10 +101,11 @@ func (c *rateCmd) Run() error {
 
 	res := discogsSearch(artist, album)
 	pri := res.Primary()
-	if pri > 0 {
-		fmt.Println(pri)
-		r := Release{Id: pri} // awkward, but whatever
-		r.rate()
+	if pri.Id > 0 {
+		// fmt.Println(pri)
+		fmt.Printf("https://www.discogs.com/release/%d\n", pri)
+		// r := Release{Id: pri} // awkward, but whatever
+		pri.rate()
 		// rateRelease(pri)
 		// rateArtist(artist)
 	}
