@@ -74,19 +74,19 @@ func getQueue(n int) []string {
 }
 
 func writeQueue(items []string) {
-	os.WriteFile(config.Library.Queue+"_", []byte(strings.Join(items, "\n")), 0666)
+	os.WriteFile(config.Library.Queue, []byte(strings.Join(items, "\n")), 0666)
 }
 
 // https://github.com/picosh/pico/blob/4632c9cd3d7bc37c9c0c92bdc3dc8a64928237d8/tui/senpai.go#L10
 
 // wrapper to call functions in a blocking manner
-type rateCmd struct {
+type postPlaybackCmd struct {
 	relpath string
 }
 
 // required methods for tea.ExecCommand
 
-func (c *rateCmd) Run() error {
+func (c *postPlaybackCmd) Run() error {
 	// if resume, return early
 
 	artist, album := filepath.Split(c.relpath)
@@ -97,33 +97,39 @@ func (c *rateCmd) Run() error {
 	// if strings.HasSuffix(album, "]") { // " [performer, ...]"
 	// 	album = album[:len(album)-7]
 	// }
-	log.Println(artist, album)
 
 	res := discogsSearch(artist, album)
-	pri := res.Primary()
-	if pri.Id > 0 {
-		// fmt.Println(pri)
-		fmt.Printf("https://www.discogs.com/release/%d\n", pri)
-		// r := Release{Id: pri} // awkward, but whatever
-		pri.rate()
-		// rateRelease(pri)
+	rel := res.Primary()
+	log.Println(rel)
+	// TODO: extract this and test
+	if rel.Id > 0 {
+		if rel.Primary > 0 {
+			rel.Id = rel.Primary // hacky; move into rate?
+		}
+		// fmt.Println(rel)
+		fmt.Println(rel.Artists[0].Name, "::", rel.Title)
+		fmt.Printf("https://www.discogs.com/release/%d\n", rel.Id)
+		rel.rate()
 		// rateArtist(artist)
 	}
 
 	q := getQueue(0)
-	nq := remove(q, c.relpath)
+	nq := *remove(&q, c.relpath)
+	log.Println(len(q), "->", len(nq))
 	writeQueue(nq)
 
 	return nil
 }
-func (c *rateCmd) SetStderr(io.Writer) {}
-func (c *rateCmd) SetStdin(io.Reader)  {}
-func (c *rateCmd) SetStdout(io.Writer) {}
+func (c *postPlaybackCmd) SetStderr(io.Writer) {}
+func (c *postPlaybackCmd) SetStdin(io.Reader)  {}
+func (c *postPlaybackCmd) SetStdout(io.Writer) {}
 
 func play(relpath string) tea.Cmd {
 	mpv_args := strings.Split("--mute=no --no-audio-display --pause=no --start=0%", " ")
-	mpv_args = append(mpv_args, filepath.Join(config.Library.Root, relpath))
+	path := filepath.Join(config.Library.Root, relpath)
+	mpv_args = append(mpv_args, path)
 	cmd := exec.Command("mpv", mpv_args...)
+	log.Println("playing:", path)
 
 	return tea.Sequence(
 		// if the altscreen is not used, new model is (inexplicably)
@@ -142,7 +148,7 @@ func play(relpath string) tea.Cmd {
 		// 	return nil
 		// },
 
-		tea.Exec(&rateCmd{relpath: relpath}, nil),
+		tea.Exec(&postPlaybackCmd{relpath: relpath}, nil),
 
 		// tea.ExitAltScreen,
 		// tea.ClearScreen,

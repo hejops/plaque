@@ -37,6 +37,8 @@ func descend(base string) ([]string, error) {
 
 // pretty-print arbitrary http (json) response without needing to know its
 // schema
+//
+// warning: resp will be closed
 func debugResponse(resp *http.Response) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
@@ -72,18 +74,24 @@ func alnum(s string) string {
 	return string(out)
 }
 
-// If target is not found in slice, slice is returned unchanged.
+// If target is not found in the dereferenced slice, the slice is unchanged.
+// This is not an in-place operation (though I want it to be).
 //
 // Warning: for performance, order is not preserved!
-func remove[T comparable](slice []T, target T) []T {
-	for i, item := range slice {
+func remove[T comparable](ptr *[]T, target T) *[]T {
+	s := *ptr
+	for i, item := range s {
 		if item == target {
 			// swap last item with target, to prevent costly
 			// shifting of items
 			// https://stackoverflow.com/a/37335777
-			slice[i] = slice[len(slice)-1]
-			return slice[:len(slice)-1]
+			s[i] = s[len(s)-1]
+			// re-assignment always reallocates, so a new ptr must
+			// be returned
+			// https://stackoverflow.com/a/56394697
+			s = s[:len(s)-1]
+			return &s
 		}
 	}
-	return slice
+	return ptr
 }

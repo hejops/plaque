@@ -1,4 +1,4 @@
 plaque
 *.toml
-*.txt
+*.txt*
 *.yaml

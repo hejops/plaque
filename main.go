@@ -17,11 +17,8 @@ import (
 // TODO: tui main menu
 
 func main() {
-	l, _ := tea.LogToFile("/tmp/tea.log", "foo")
-	defer l.Close()
-
-	// discogsSearchArtist("metallica")[0].Releases()
-	// return
+	lf, _ := tea.LogToFile("/tmp/tea.log", "plaque")
+	defer lf.Close()
 
 	if _, err := tea.NewProgram(
 		newBrowser(getQueue(10), Queue),
@@ -30,7 +27,7 @@ func main() {
 		panic(err)
 	}
 
-	if _, err := tea.NewProgram(artistBrowser()).Run(); err != nil {
-		panic(err)
-	}
+	// if _, err := tea.NewProgram(artistBrowser()).Run(); err != nil {
+	// 	panic(err)
+	// }
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -78,6 +79,8 @@ func discogsReq(
 	req.Header.Add("Authorization", "Discogs token="+config.Discogs.Key)
 	req.Header.Add("Cache-Control", "no-cache")
 
+	log.Println(method, u.RequestURI())
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		panic(err)
@@ -88,17 +91,31 @@ func discogsReq(
 // remember: all fields must be uppercase, and any fields in camelcase must be
 // marked in order to be parsed
 
-// this struct is shared across several contexts: search results, artist
-// releases, and actual releases
+// A general-purpose struct that is shared across several contexts: search
+// results (which may or may not be master), artist releases, master releases,
+// and 'actual' releases.
+//
+// This is because Discogs stores releases in a variety of representations with
+// subtle differences in schema.
 type Release struct {
-	Id          int
-	ReleaseType string `json:"type"` // 'release' or 'master'
+	// The meaning of Id depends on ReleaseType; i.e. Id will be a master
+	// id if ReleaseType = "master", or a 'regular' release id if
+	// ReleaseType = "release"
+	Id int
 
-	MasterId    int    `json:"master_id"`  // may be 0
-	MasterUrl   string `json:"master_url"` // may be empty
+	// For search results, artist will be included in this field (i.e.
+	// "artist - title"). For this reason, treating search results as
+	// Release is discouraged.
+	Title string
+
+	Artists     []Artist
 	ResourceUrl string `json:"resource_url"`
-	Title       string
 	Year        string // may be empty
+
+	MasterId    int    `json:"master_id"`    // may be 0 (if no master)
+	MasterUrl   string `json:"master_url"`   // may be empty (if no master)
+	Primary     int    `json:"main_release"` // only for master releases, otherwise 0
+	ReleaseType string `json:"type"`         // 'release' or 'master'
 
 	// search-only (?)
 
@@ -107,7 +124,7 @@ type Release struct {
 
 	// artist-only
 
-	Artist string
+	Artist string // artist-only
 	Format string // ", "-delimited
 	Label  string
 	Role   string // typically "Main"
@@ -125,6 +142,7 @@ func discogsSearch(artist string, album string) SearchResult {
 	// (compared to discogsSearchArtist), but i want to be able to get
 	// primary via a method for clearer intent (i.e. `result.Primary()`
 	// instead of `getPrimary(releases)`)
+	log.Println("searching", artist, album)
 	resp := discogsReq(
 		"/database/search",
 		"GET",
@@ -134,14 +152,14 @@ func discogsSearch(artist string, album string) SearchResult {
 	return deserialize(resp, SearchResult{})
 }
 
-// if r.Results contains a master release (correctness is not checked), returns
-// the id of the primary version of the first master. otherwise returns id of
-// first result (as it is probably still meaningful to callers).
+// If r.Results contains a master release (correctness is not checked), and
+// returns the first master. Otherwise returns the first result (as it is
+// probably still meaningful to callers).
 //
-// if no results are found, returns empty Release (Id = 0); callers should
-// check Release.Id
+// Note: a second GET call is always performed.
 //
-// in my use case, I have never actually needed to use the master id.
+// If no results are found, returns empty Release (Id = 0); callers should
+// check Release.Id.
 func (r *SearchResult) Primary() Release {
 	if len(r.Results) == 0 {
 		// return 0
@@ -157,35 +175,25 @@ func (r *SearchResult) Primary() Release {
 			continue
 		}
 
-		// merge into Release, if necessary
-		// type Master struct {
-		// 	Id      int
-		// 	Primary int `json:"main_release"`
-		//
-		// 	// LowestPrice float32
-		// 	Title       string
-		// 	Uri         string
-		// 	VersionsUrl string `json:"versions_url"`
-		// 	Year        string
-		//
-		// 	Artists   []map[string]any
-		// 	Genre     []string
-		// 	Tracklist []map[string]any
-		// }
+		// foo := discogsReq("/masters/"+strconv.Itoa(res.MasterId), "GET", nil)
+		// debugResponse(foo)
+		// panic(1)
 
 		return deserialize(
 			// TODO: should use joinpath, but i'm lazy to handle errors
 			discogsReq("/masters/"+strconv.Itoa(res.MasterId), "GET", nil),
 			Release{},
-			// struct {
-			// 	Id      int
-			// 	Primary int `json:"main_release"`
-			// }{},
-		) //.Primary
+		)
 	}
-	return r.Results[0] //.Id
+	// return r.Results[0]
+	return deserialize(
+		discogsReq("/releases/"+strconv.Itoa(r.Results[0].Id), "GET", nil),
+		Release{},
+	)
 }
 
+// requires r.Id (callers should override r.Id with r.Primary for now)
+//
 // does nothing if release already rated
 func (r *Release) rate() { // {{{
 	// releases/{r.Id}/rating/{username}
@@ -251,7 +259,7 @@ func (r *Release) rate() { // {{{
 
 type Artist struct {
 	Id          int
-	Name        string          `json:"title"`
+	Name        string          //`json:"title"`
 	ResourceUrl string          `json:"resource_url"`
 	UserData    map[string]bool `json:"user_data"` // in_collection
 }
