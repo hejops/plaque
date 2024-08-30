@@ -1,5 +1,8 @@
 // Playback and queue management. Playback is delegated to mpv, which is
-// blocking.
+// allowed to run in a blocking manner for full keyboard control. As such,
+// multiple instances of the program are to be expected, but only one instance
+// can be running mpv; other instances can only add to queue, and terminate
+// immediately.
 //
 // Scrobbling is out of scope of this program; consider
 // https://github.com/Feqzz/mpv-lastfm-scrobbler
@@ -8,8 +11,8 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"math/rand/v2"
 	"os"
@@ -19,6 +22,38 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func getResumes() []string {
+	// When mpv is quit with the `quit_watch_later` command, a file is
+	// written to this dir, containing the full path to the file.
+
+	var resumes []string
+	err := filepath.WalkDir(WatchLaterDir, func(path string, d fs.DirEntry, err error) error {
+		if d.IsDir() {
+			return nil
+		}
+
+		fo, _ := os.Open(path)
+		defer fo.Close()
+		sc := bufio.NewScanner(fo)
+		sc.Scan() // only need to read 1st line
+		line := sc.Text()
+
+		file := line[2:] // # "# "
+		if fi, e := os.Stat(file); e == nil &&
+			!fi.IsDir() &&
+			// TODO: startswith?
+			strings.Contains(file, config.Library.Root) {
+			rel, _ := filepath.Rel(config.Library.Root, filepath.Dir(file))
+			resumes = append(resumes, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	return resumes
+}
 
 // Select n random items from the queue file (containing relpaths), and return
 // them as fullpaths
@@ -30,18 +65,13 @@ func getQueue(n int) []string {
 	}
 
 	// my queue file is about 8000, so it is worth doing some optimisation
-
-	// b, err := os.ReadFile(config.Library.Queue)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// relpaths := strings.Split(string(b), "\n")
+	// https://scribe.rip/golicious/comparing-ioutil-readfile-and-bufio-scanner-ddd8d6f18463
 
 	// https://stackoverflow.com/a/16615559
 	var relpaths []string
 	file, err := os.Open(config.Library.Queue)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalln(err)
 	}
 	defer file.Close()
 	sc := bufio.NewScanner(file)
@@ -56,7 +86,7 @@ func getQueue(n int) []string {
 		relpaths = append(relpaths, sc.Text())
 	}
 	if sc.Err() != nil {
-		log.Fatal(err)
+		log.Fatalln(err)
 	}
 
 	// TODO: split off sampling
@@ -74,7 +104,14 @@ func getQueue(n int) []string {
 }
 
 func writeQueue(items []string) {
-	os.WriteFile(config.Library.Queue, []byte(strings.Join(items, "\n")), 0666)
+	err := os.WriteFile(
+		config.Library.Queue,
+		[]byte(strings.Join(items, "\n")),
+		0666,
+	)
+	if err != nil {
+		panic(err)
+	}
 }
 
 // https://github.com/picosh/pico/blob/4632c9cd3d7bc37c9c0c92bdc3dc8a64928237d8/tui/senpai.go#L10
@@ -88,35 +125,59 @@ type postPlaybackCmd struct {
 
 func (c *postPlaybackCmd) Run() error {
 	// if resume, return early
-
-	artist, album := filepath.Split(c.relpath)
-	// TODO: artist endswith ) -> remove translation
-	if strings.HasSuffix(album, ")") { // " (YYYY)"
-		album = album[:len(album)-7]
-	}
-	// if strings.HasSuffix(album, "]") { // " [performer, ...]"
-	// 	album = album[:len(album)-7]
-	// }
-
-	res := discogsSearch(artist, album)
-	rel := res.Primary()
-	log.Println(rel)
-	// TODO: extract this and test
-	if rel.Id > 0 {
-		if rel.Primary > 0 {
-			rel.Id = rel.Primary // hacky; move into rate?
+	_ = filepath.WalkDir(WatchLaterDir, func(path string, d fs.DirEntry, err error) error {
+		b, e := os.ReadFile(path)
+		if e != nil {
+			return e
 		}
-		// fmt.Println(rel)
-		fmt.Println(rel.Artists[0].Name, "::", rel.Title)
-		fmt.Printf("https://www.discogs.com/release/%d\n", rel.Id)
-		rel.rate()
-		// rateArtist(artist)
-	}
+		s := string(b)
+		if strings.Contains(s, config.Library.Root) {
+			log.Println("will resume:", s)
+			return fs.SkipAll
+		}
+		return err
+	})
 
 	q := getQueue(0)
 	nq := *remove(&q, c.relpath)
-	log.Println(len(q), "->", len(nq))
+	ensure(len(q)-len(nq) == 1)
 	writeQueue(nq)
+	log.Println("removed:", c.relpath)
+
+	artist, album := filepath.Split(c.relpath)
+
+	// remove translation
+	if artist[len(artist)-1] == ')' {
+		i := strings.LastIndex(artist, "(")
+		artist = artist[:i]
+	}
+
+	if album[len(album)-1] == ')' { // " (YYYY)"
+		album = album[:len(album)-7]
+	}
+
+	var res SearchResult
+	if album[len(album)-1] == ']' { // " [performer, ...]"
+		res = discogsSearch(movePerfsToArtist(artist, album))
+	} else {
+		res = discogsSearch(artist, album)
+	}
+	rel := res.Primary()
+	rel.rate()
+
+	artists := discogsSearchArtist(artist)
+	if len(artists) > 0 {
+		// artists[0].rate()
+		for _, a := range artists {
+			// log.Println("artist:", a.Title, a.UserData)
+			if !a.UserData["in_collection"] {
+				continue
+			}
+			log.Println("rating releases of", a.Title)
+			a.rate()
+			break // do we need to try more than 1?
+		}
+	}
 
 	return nil
 }
@@ -125,17 +186,13 @@ func (c *postPlaybackCmd) SetStdin(io.Reader)  {}
 func (c *postPlaybackCmd) SetStdout(io.Writer) {}
 
 func play(relpath string) tea.Cmd {
-	mpv_args := strings.Split("--mute=no --no-audio-display --pause=no --start=0%", " ")
 	path := filepath.Join(config.Library.Root, relpath)
-	mpv_args = append(mpv_args, path)
-	cmd := exec.Command("mpv", mpv_args...)
+	mpvCmd := exec.Command("mpv", append(mpvArgs, path)...)
 	log.Println("playing:", path)
 
 	return tea.Sequence(
-		// if the altscreen is not used, new model is (inexplicably)
-		// rendered before (above) mpv
 		// tea.EnterAltScreen,
-		tea.ExecProcess(cmd, nil),
+		tea.ExecProcess(mpvCmd, nil),
 		// tea.ExitAltScreen,
 		// tea.ClearScreen,
 
