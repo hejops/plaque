@@ -11,6 +11,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -23,7 +24,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func getResumes() []string {
+const QueueCount = 5
+
+func getResumes() *[]string {
 	// When mpv is quit with the `quit_watch_later` command, a file is
 	// written to this dir, containing the full path to the file.
 
@@ -42,7 +45,6 @@ func getResumes() []string {
 		file := line[2:] // # "# "
 		if fi, e := os.Stat(file); e == nil &&
 			!fi.IsDir() &&
-			// TODO: startswith?
 			strings.Contains(file, config.Library.Root) {
 			rel, _ := filepath.Rel(config.Library.Root, filepath.Dir(file))
 			resumes = append(resumes, rel)
@@ -52,7 +54,29 @@ func getResumes() []string {
 	if err != nil {
 		panic(err)
 	}
-	return resumes
+	if len(resumes) == 0 {
+		return nil
+	}
+	return &resumes
+}
+
+func willResume(relpath string) (resume bool) {
+	path := filepath.Join(config.Library.Root, relpath)
+	_ = filepath.WalkDir(WatchLaterDir, func(p string, d fs.DirEntry, _ error) error {
+		if d.IsDir() {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			panic(err)
+		}
+		if strings.Contains(string(b), path) {
+			resume = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return resume
 }
 
 // Select n random items from the queue file (containing relpaths), and return
@@ -67,27 +91,15 @@ func getQueue(n int) []string {
 	// my queue file is about 8000, so it is worth doing some optimisation
 	// https://scribe.rip/golicious/comparing-ioutil-readfile-and-bufio-scanner-ddd8d6f18463
 
-	// https://stackoverflow.com/a/16615559
-	var relpaths []string
-	file, err := os.Open(config.Library.Queue)
+	// according to a simple benchmark, os.ReadFile() is almost 2-3x as
+	// fast as bufio.NewScanner(). NewScanner can probably only be faster
+	// if we know how to stop scanning early (which we don't)
+
+	b, err := os.ReadFile(config.Library.Queue)
 	if err != nil {
-		log.Fatalln(err)
+		panic(err)
 	}
-	defer file.Close()
-	sc := bufio.NewScanner(file)
-	// chance := float32(n) / float32(foo)
-	for sc.Scan() {
-		// could potentially move rng stuff in here (e.g. chance =
-		// n/len, or generate idxs in advance); but need to get number
-		// of newlines in advance (so need to read whole file
-		// anyway...)
-		// if chance < rand.Float32() {
-		// }
-		relpaths = append(relpaths, sc.Text())
-	}
-	if sc.Err() != nil {
-		log.Fatalln(err)
-	}
+	relpaths := strings.Split(string(b), "\n")
 
 	// TODO: split off sampling
 	switch n {
@@ -116,7 +128,7 @@ func writeQueue(items []string) {
 
 // https://github.com/picosh/pico/blob/4632c9cd3d7bc37c9c0c92bdc3dc8a64928237d8/tui/senpai.go#L10
 
-// wrapper to call functions in a blocking manner
+// wrapper to call functions in a blocking manner (via Run)
 type postPlaybackCmd struct {
 	relpath string
 }
@@ -124,19 +136,15 @@ type postPlaybackCmd struct {
 // required methods for tea.ExecCommand
 
 func (c *postPlaybackCmd) Run() error {
-	// if resume, return early
-	_ = filepath.WalkDir(WatchLaterDir, func(path string, d fs.DirEntry, err error) error {
-		b, e := os.ReadFile(path)
-		if e != nil {
-			return e
-		}
-		s := string(b)
-		if strings.Contains(s, config.Library.Root) {
-			log.Println("will resume:", s)
-			return fs.SkipAll
-		}
-		return err
-	})
+	if willResume(c.relpath) {
+		// we -could- propagate some error to tea.Exec, which can be
+		// handled there. for practical purposes, all we need to do is
+		// just return to Queue
+		log.Println("will resume:", c.relpath)
+		return nil
+		// // TODO: figure out how to return a 'real' error
+		// return fmt.Errorf("resume")
+	}
 
 	q := getQueue(0)
 	nq := *remove(&q, c.relpath)
@@ -146,24 +154,43 @@ func (c *postPlaybackCmd) Run() error {
 
 	artist, album := filepath.Split(c.relpath)
 
-	// remove translation
+	// remove possible translation
 	if artist[len(artist)-1] == ')' {
 		i := strings.LastIndex(artist, "(")
-		artist = artist[:i]
+		artist = artist[:i-1]
 	}
 
-	if album[len(album)-1] == ')' { // " (YYYY)"
+	// remove album suffix " (YYYY)"
+	if album[len(album)-1] == ')' {
 		album = album[:len(album)-7]
 	}
 
+	// aside from edge cases, only classical albums have " [performer, ...]" suffix
 	var res SearchResult
-	if album[len(album)-1] == ']' { // " [performer, ...]"
+	if album[len(album)-1] == ']' {
 		res = discogsSearch(movePerfsToArtist(artist, album))
 	} else {
 		res = discogsSearch(artist, album)
 	}
+
 	rel := res.Primary()
-	rel.rate()
+	if rel.rate() == 1 &&
+		// guard rail to prevent deleting classical artists
+		album[len(album)-1] != ']' {
+		p := filepath.Join(config.Library.Root, artist)
+		if _, err := os.Stat(p); err != nil {
+			return nil
+		}
+
+		fmt.Println("delete?", p)
+		var del string
+		_, _ = fmt.Scanln(&del)
+		if del == "y" {
+			_ = os.RemoveAll(p)
+			log.Println("deleted:", p)
+		}
+
+	}
 
 	artists := discogsSearchArtist(artist)
 	if len(artists) > 0 {
@@ -191,23 +218,21 @@ func play(relpath string) tea.Cmd {
 	log.Println("playing:", path)
 
 	return tea.Sequence(
-		// tea.EnterAltScreen,
 		tea.ExecProcess(mpvCmd, nil),
-		// tea.ExitAltScreen,
-		// tea.ClearScreen,
-
-		// // this func/Msg actually works (program will wait for 1 line
-		// // of stdin, then proceed with put/post), but since it is not
-		// // blocking, very bizarre behaviour will be observed (e.g. new
-		// // selector is rendered on top of prompt)
-		// func() tea.Msg {
-		// 	rateRelease(4319735)
-		// 	return nil
-		// },
-
-		tea.Exec(&postPlaybackCmd{relpath: relpath}, nil),
-
-		// tea.ExitAltScreen,
-		// tea.ClearScreen,
+		tea.Exec(
+			&postPlaybackCmd{relpath: relpath},
+			nil,
+			// // if you need to check/handle the error returned by
+			// // Run and turn that into a Cmd, you could; otherwise,
+			// // we just return to Queue
+			// func(err error) tea.Msg {
+			// 	// if err.Error() == "resume" {
+			// 	// 	log.Println("quitting and will resume")
+			// 	// 	return tea.Quit()
+			// 	// 	// return nil
+			// 	// }
+			// 	return nil
+			// },
+		),
 	)
 }

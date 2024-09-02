@@ -1,15 +1,52 @@
+// The Browser can exist in one of three states (Modes). Each state leverages
+// the same list-based TUI to present a (different) set of items to the user:
+//
+//	1. Queue: paths of depth 2, typically loaded from a (local) file
+//	2. Artists: immediate children directories of root, generated via traversal
+//	3. Albums: directories under an artist (i.e. depth 2)
+//
+// The lists are implemented as a simple fzf-like menu with basic (non-fuzzy)
+// filtering.
+//
+// For simplicity of rendering, all items must be valid directories, relative
+// to the library root. On selecting an item, the Browser transitions to the
+// next state, crudely represented by the following finite state machine:
+//
+//                  /----> [Playback]  /---> End
+//                  |           |     /
+//                  |           v    /
+//                Queue <--- Albums /--- Artists
+//                  ^                       ^
+//                   \------ Start --------/
+//
+// - playback (and the associated post-playback actions) is always blocking
+// - on startup, Queue and Artists modes are available
+//   - only Queue mode can (and must) transition to playback
+//   - Artists mode transitions to Albums mode, then always exits
+// - the program can be gracefully exited in any Mode
+
 package main
 
 import (
-	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/list"
+	"github.com/charmbracelet/x/term"
 )
+
+// https://leg100.github.io/en/posts/building-bubbletea-programs/
+
+var IsQueued = map[bool]string{
+	true:  "Q",
+	false: " ",
+}
 
 type Mode int
 
@@ -22,83 +59,206 @@ const (
 // mostly copied from https://github.com/charmbracelet/bubbletea/tree/master/tutorials/basics
 
 type Browser struct {
-	mode   Mode
-	width  int // calculated dynamically (?)
-	height int // calculated dynamically (?)
+	mode     Mode
+	items    []string            // valid relpaths
+	previews map[string][]string // keys correspond to items
+	// queued   map[string]any      // subset of items that are queued; only used in Albums mode
 
-	// if false, album will be queued
-	play bool
+	c      chan string
+	noquit bool
+	// may only be true in Albums mode
 
-	// should be valid relpaths
-	items   []string
+	width  int
+	height int
+
 	offset  int
 	cursor  int
 	input   string
 	matches []int
-
-	// only used in Albums mode
-	queue map[string]any
+	queued  map[int]any // subset of items that are queued; only used in Albums mode
 }
 
-// all items must be valid relpaths (relative to root)
-func newBrowser(items []string, mode Mode) Browser {
-	// TODO: only pass mode and optional artist arg (items can be
-	// auto-generated for Queue and Artists)
+// All items must be valid relpaths (relative to root)
+func newBrowser(items []string, mode Mode) *Browser {
+	// TODO: on cold start, slow os.Stat prevents View from being called
+	defer timer("cold stat")()
 
-	info, err := os.Stat(filepath.Join(config.Library.Root, items[0]))
+	// putting this in a goroutine does not prevent blocking (unless the
+	// newBrowser call itself is also async). in any case, this is just a
+	// guard rail which i intend to remove sooner or later
+	go checkRelPaths(items)
+
+	// init window correctly; a "recursively" spawned Browser is
+	// initialised with zeroed dimensions!
+	width, height, err := term.GetSize(os.Stdout.Fd())
 	if err != nil {
-		panic(err)
-	}
-	if !info.IsDir() {
-		panic("not dir")
+		panic("failed to get terminal size")
 	}
 
-	return Browser{
-		items:   items,
+	return &Browser{
 		mode:    mode,
-		play:    true,
+		items:   items,
 		matches: intRange(len(items)),
+		c:       make(chan string),
+
+		width:  width,
+		height: height,
 	}
 }
 
-func artistBrowser() Browser {
+// TODO: group the 3 funcs into one: notice that Albums needs a string arg, and
+// Queue needs an int arg. these args could be passed as a struct
+
+// type BrowserOpts struct {
+// 	mode   Mode
+// 	queue  int // number of items to sample
+// 	artist string
+// }
+
+// resume should only be true on the first invocation (i.e. on startup)
+func queueBrowser(resume bool) *Browser {
+	// cold disk: print a 'waiting' msg after 2s elapsed
+	timer := time.NewTimer(time.Second * 2)
+	defer timer.Stop()
+	go func() {
+		// fmt.Println("please wait...", <-timer.C)
+		log.Println("cold disk...", <-timer.C)
+	}()
+
+	resumes := getResumes()
+	var b *Browser
+	switch {
+	case resume && resumes != nil:
+		b = newBrowser(*resumes, Queue)
+		b.noquit = true
+	default:
+		b = newBrowser(getQueue(QueueCount), Queue)
+	}
+
+	return b
+}
+
+func artistBrowser() *Browser {
 	items, _ := descend(config.Library.Root)
 	return newBrowser(items, Artists)
 }
 
-// https://github.com/antonmedv/walk/blob/ba821ed78f31e0ebd46eeef19cfe642fc1ec4330/main.go#L427
-// note the pointer; we are mutating Browser
+func albumsBrowser(artist string) *Browser {
+	// more complex since we need to check queue and populate the `queued`
+	// field
+
+	m := make(map[string]any)
+	for _, x := range getQueue(0) {
+		m[x] = nil
+	}
+
+	// TODO: the rest is i/o; could be goroutine'd?
+	albums, err := descend(filepath.Join(config.Library.Root, artist))
+	if err != nil {
+		panic(err)
+	}
+
+	sortByYear(albums)
+
+	items := []string{}
+	// queued := make(map[string]any)
+	// int keys are much easier to index (for View), but require correct sort
+	queued := make(map[int]any)
+	previews := make(map[string][]string)
+	for i, alb := range albums {
+		// newBrowser requires valid relpaths
+		relpath := filepath.Join(artist, alb)
+		fullpath := filepath.Join(config.Library.Root, relpath)
+		items = append(items, relpath)
+
+		if _, q := m[relpath]; q {
+			// queued[relpath] = nil
+			queued[i] = nil
+
+			p, err := descend(fullpath)
+			if err != nil {
+				panic(err)
+			}
+			previews[relpath] = p
+		}
+	}
+
+	b := newBrowser(items, Albums)
+	b.queued = queued
+	b.previews = previews
+
+	return b
+}
 
 func (b *Browser) updateSearch(msg tea.KeyMsg) {
-	switch b.input {
-	case "":
+	// https://github.com/antonmedv/walk/blob/ba821ed78f31e0ebd46eeef19cfe642fc1ec4330/main.go#L427
+	// note the pointer; we are mutating Browser
+
+	switch {
+
+	case b.input == "":
+		// return all indices
 		b.matches = intRange(len(b.items))
+		return
+
+	case b.mode == Albums:
+		// b.items is relpath, but we want basenames
+		b.matches = fuzzySearch(Map(b.items, filepath.Base), b.input)
+
 	default:
-		var matchIdxs []int
-		for i, rel := range b.items {
-			// // this -should- always work...
-			// rel, _ := filepath.Rel(config.Library.Root, item)
-			// TODO: if b.input has ' ', split and match each word
-			if strings.Contains(strings.ToLower(rel), b.input) {
-				matchIdxs = append(matchIdxs, i)
-			}
-		}
-		b.matches = matchIdxs
-		if len(b.matches) > 0 {
-			b.cursor = 0
-		}
+		b.matches = fuzzySearch(b.items, b.input)
+		// if b.input == "a" {
+		// 	log.Println("foo", b.input, b.matches, b.items, b.cursor)
+		// 	time.Sleep(time.Second)
+		// }
+
+	}
+
+	if len(b.matches) > 0 {
+		b.cursor = 0
 	}
 }
 
 // tea.Model interface; the required methods cannot use pointer receivers
+// TODO: (why not?)
 
-func (_ Browser) Init() tea.Cmd {
-	// not sure if this is needed
-	return tea.ClearScreen
+func (b *Browser) Init() tea.Cmd {
+	// note: mutating b here does not ever propagate to Update!
+	// b.init_test()
+
+	return nil
+
+	// return tea.Sequence(
+	// 	func() tea.Msg {
+	// 		b.init_test()
+	// 		return nil
+	// 	},
+	// )
 }
 
-func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
+// start program with blank model, then do i/o in Init?
+// https://github.com/kindlyops/vbs/blob/9a57beb19b68928966a64d55f0b9da752e779953/cmd/play.go#L208
+// func (b *Browser) init_test() {
+// 	resumes := getResumes()
+// 	switch resumes {
+// 	case nil:
+// 		b = newBrowser(*resumes, Queue)
+// 		b.noquit = true
+// 	default:
+// 		b = queueBrowser()
+// 	}
+//
+// 	log.Println("init done:", b)
+// 	// return b
+// }
 
+func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
+	// log.Println("msg:", msg) // not terribly informative
+
+	// // https://leg100.github.io/en/posts/building-bubbletea-programs/
+	// spew.Fdump(b.dump, msg)
+
+	// notice this (subtle) reassignment
 	switch msg := msg.(type) {
 
 	// https://github.com/charmbracelet/bubbletea/discussions/818#discussioncomment-6914769
@@ -120,14 +280,28 @@ func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 		switch msg.String() {
 
 		case "ctrl+w":
-			b.input = ""
+			b.input = "" // TODO: delete last word
 			b.cursor = 0 // fzf resets cursor pos
 			b.updateSearch(msg)
 			return b, nil
 
 		case "ctrl+c", "esc", "ctrl+\\":
 			// os.Exit(0) // ungraceful exit
-			// return nil, tea.Quit // bad pointer
+			// return nil, tea.Quit // bad pointer!
+
+			// allow just going back to Queue
+			if b.noquit {
+				switch b.mode {
+				case Albums:
+					return queueBrowser(false), nil
+				case Queue:
+					nb := queueBrowser(false)
+					nb.noquit = false
+					return nb, nil
+				}
+			}
+
+			log.Println("quitting")
 			return b, tea.Quit // graceful exit
 
 		case "backspace":
@@ -170,127 +344,161 @@ func (b Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 
 		// https://github.com/antonmedv/walk/blob/ba821ed78f31e0ebd46eeef19cfe642fc1ec4330/main.go#L259 (?)
 		case "enter":
-
-			// if b.cursor > len(b.matches) {
-			// 	return b, nil
-			// }
-			// idx := b.matches[b.cursor]
-			sel := b.items[b.matches[b.cursor]]
-
-			switch b.mode {
-			case Artists:
-				albums, err := descend(filepath.Join(config.Library.Root, sel))
-				var relpaths []string
-				for _, alb := range albums {
-					relpaths = append(relpaths, filepath.Join(sel, alb))
-				}
-				if err != nil {
-					panic(err)
-				}
-				nb := newBrowser(relpaths, Albums)
-
-				// init window correctly; a "recursively"
-				// spawned Browser leaves b.height zeroed!
-				nb.height = b.height
-				nb.width = b.width
-
-				// TODO: set .queue
-				// q := make(map[string]any)
-				// GetQueue(-1)
-				// nb.queue = q
-
-				return nb, tea.ClearScreen
-
-			case Queue:
-				return newBrowser(getQueue(10), Queue), play(sel)
-
-			case Albums:
-				if b.play { // uncommon in real use
-					return newBrowser(getQueue(10), Queue), play(sel)
-				} else {
-					// tea.Println("queued", selected)
-					// TODO: append to queue file
-					return b, tea.Sequence(tea.ClearScreen, tea.Quit)
-				}
+			if len(b.matches) == 0 {
+				return b, nil // do nothing
 			}
+
+			// return nil, func() tea.Msg {
+			// 	time.Sleep(time.Minute)
+			// 	return nil
+			// }
+
+			return b.getNewState()
+
+			// // does this make sense?
+			// return b, func() tea.Msg {
+			// 	b.getNewState()
+			// 	return nil
+			// }
 		}
 	}
 
+	// ensure(len(b.items) > 0)
+
+	// panic(msg)
 	return b, nil
 } // }}}
 
-func (b Browser) View() string {
-	// split screen into 2 vertical panes, with preview window on right
+func (b *Browser) getNewState() (*Browser, tea.Cmd) {
+	pos := b.matches[b.cursor]
+	sel := b.items[pos] // relpath
+	switch b.mode {
+	case Artists:
+		// return albumsBrowser(sel), nil
+		return albumsBrowser(sel), tea.ClearScreen
+
+	case Queue:
+
+		// note: we need to split artist here (even though we do it
+		// again in `play`)
+		ensure(strings.Contains(sel, "/"))
+		artist := strings.Split(sel, "/")[0]
+
+		nb := albumsBrowser(artist)
+		// allow user to back out of the selection without quitting the
+		// program
+		nb.noquit = true
+
+		// sel is (actually) removed from queue after play, but nb will
+		// still have it, so we 'preempt'
+		// delete(nb.queued, sel)
+		delete(nb.queued, pos)
+
+		// after `play`, start View in Albums mode
+		// TODO: detect if sel was deleted (in which case, go back to Queue)
+		return nb, play(sel)
+
+	case Albums:
+		// add selected item to queue (if it exists), then go back to
+		// Queue
+		if _, err := os.Stat(filepath.Join(config.Library.Root, sel)); err == nil {
+			q := getQueue(0)
+			nq := append(q, sel)
+			ensure(len(nq)-len(q) == 1)
+			writeQueue(nq)
+			log.Println("queued:", sel)
+		}
+
+		return queueBrowser(false), nil
+
+	default:
+		panic("Invalid state")
+	}
+}
+
+// Split screen into 2 vertical panes, with preview window on right
+func (b *Browser) View() string {
+	// The TUI is not very appealing, but this is ~by design~, as 1) I
+	// really don't care about styling, 2) most of the time is spent in
+	// mpv, and 3) the program is meant to just get out of the way and not
+	// be distracting.
+	//
+	// [input]
+	// [item1]|[preview1]
+	// [item2]|[preview2]
+	// ...    |...
+	// (where | represents the border)
+
+	// log.Println("view:", b)
+
 	// https://github.com/charmbracelet/bubbletea/blob/master/examples/split-editors/main.go
 
-	lines := []string{}
+	if len(b.matches) == 0 {
+		return "no matches; please clear input"
+	}
 
-	// log.Println(b.cursor)
+	IsSelected := map[bool]string{
+		true:  "→",
+		false: " ",
+	}
+
+	sel := b.items[b.matches[b.cursor]]
+
+	leftItems := list.New( /* b.items */ ).Enumerator(func(items list.Items, index int) string {
+		indicator := IsSelected[index == b.cursor] // "> [...]"
+		if b.mode == Albums {
+			_, q := b.queued[index]
+			indicator = indicator + " " + IsQueued[q] // "> Q [...]"
+		}
+		return indicator
+	})
 
 	for i, idx := range b.matches {
-
 		if i < b.offset {
 			continue
 		}
-
-		cursor := " "
-		if b.cursor == i { // 'raw' 0-based index
-			// cursor = "→" // messes with truncation, presumably because len > 1
-			cursor = ">"
-		}
-
 		item := b.items[idx] // idx is the actual index that points to the item
-		var base string
-		if b.mode == Queue {
-			base = item
-		} else {
-			base = path.Base(item)
+
+		switch b.mode {
+		case Albums:
+			// _, q := b.queued[item]
+			// item = IsQueued[q] + " " + path.Base(item)
+			item = path.Base(item)
 		}
 
-		// if b.mode == Albums {
-		// 	_, queued := b.queue[item]
-		// 	if queued {
-		// 		base = QueuedSymbol + " " + base
-		// 	}
-		// }
-
-		line := fmt.Sprintf("%s %s", cursor, base)
-
-		// TODO: ellipsis properly
-		// upper bound (half of term width)
-		// note: lower bound is not enforced (i.e. not fixed width)
-		if b.width > 0 && len(line) > b.width/2 {
-			line = line[:b.width/2] + "..."
-		}
-
-		// log.Println(i, idx, item, line)
-		lines = append(lines, line)
-
-		// why -3? not sure...
-		if i > b.height-3 {
-			break
-		}
-	}
-	// log.Println(len(lines), "lines, height", b.height)
-	left := strings.Join(lines, "\n")
-	// return left
-	// sep := strings.Repeat(" │ \n", max(0, b.height-1))
-
-	var s string
-	if len(b.matches) > 0 {
-		sel := b.items[b.matches[b.cursor]]
-		p := filepath.Join(config.Library.Root, sel)
-		previewItems, err := descend(p)
-		if err != nil {
-			previewItems = []string{"error"}
-		} else if b.height > 0 && len(previewItems) > b.height {
-			previewItems = previewItems[:max(0, b.height-1)]
-			// previewItems = previewItems[:b.height]
-		}
-		right := strings.Join(previewItems, "\n")
-		s = lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+		leftItems.Item(item) // inplace
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, b.input, s)
-	// return lipgloss.PlaceHorizontal(25, lipgloss.Top, s)
+	rightItems := list.New().Enumerator(func(_ list.Items, _ int) string { return "" })
+	preview, ok := b.previews[sel]
+
+	p := filepath.Join(config.Library.Root, sel)
+	previews, err := descend(p)
+
+	switch {
+	case ok: // usually only in Albums mode
+		rightItems.Items(preview)
+	case err != nil:
+		rightItems.Item("error")
+	default:
+		rightItems.Items(previews)
+	}
+
+	panes := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		lipgloss.NewStyle().
+			// Inline(true). // forces multiline string back to single line
+			Width(b.width*3/5). // takes priority over right
+			// important: Height prioritises displaying last items,
+			// MaxHeight prioritises displaying first items
+			MaxHeight(b.height-3).
+			Render(leftItems.String()),
+		lipgloss.NewStyle().
+			MaxHeight(b.height-3). // should always be MaxHeight, never Height
+			BorderLeft(true).      // if omitted, assumes full border
+			BorderStyle(lipgloss.NormalBorder()).
+			Render(rightItems.String()),
+	)
+
+	return lipgloss.JoinVertical(lipgloss.Left, b.input, panes)
 }

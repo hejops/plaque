@@ -4,6 +4,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/BurntSushi/toml"
@@ -13,26 +14,37 @@ import (
 // https://github.com/Ragnaroek/run-slacker/blob/a7a9e3618a10ab7a6c099cbb4210ee0c9af1469a/run.go#L16
 
 type Config struct {
-	Discogs Discogs
-	Library Library
-}
+	Discogs struct {
+		Username   string `toml:"username"`
+		Key        string `toml:"key"`
+		MaxResults int    `toml:"max_results"`
+	}
 
-type Discogs struct {
-	Username   string `toml:"username"`
-	Key        string `toml:"key"`
-	MaxResults int    `toml:"max_results"`
-}
+	// TODO: can toml infer?
+	Library struct {
+		Root  string `toml:"root"`
+		Queue string `toml:"queue"`
+		// Foo   string
+	}
 
-type Library struct {
-	Root  string `toml:"root"`
-	Queue string `toml:"queue"`
+	Mpv struct {
+		Args          string
+		WatchLaterDir string
+	}
 }
 
 // https://github.com/gami/simple_arch_example/blob/34fb11a31acc35fcb01a1e36c3ea1194bbe23074/config/config.go#L32
+// TODO: https://github.com/spf13/viper#reading-config-files (esp for cfg creation)
 
 var (
 	config *Config
 	once   sync.Once
+
+	// TODO: can be declared in config
+
+	// https://mpv.io/manual/master/#options-watch-later-dir
+	WatchLaterDir = os.ExpandEnv("$HOME/.local/state/mpv/watch_later")
+	mpvArgs       = strings.Fields("--mute=no --no-audio-display --pause=no --start=0%")
 )
 
 func init() {
@@ -49,7 +61,7 @@ func init() {
 			config.Library.Queue,
 		} {
 			if v == "" {
-				log.Fatal("empty fields found:\n", spew.Sdump(config))
+				log.Fatalln("empty fields found:\n", spew.Sdump(config))
 			}
 		}
 
@@ -64,7 +76,7 @@ func init() {
 		} {
 			_, err := os.Stat(p)
 			if err != nil { //|| !i.IsDir() {
-				log.Fatal("not a directory: ", p)
+				log.Fatalln("not a directory: ", p)
 			}
 		}
 
@@ -89,5 +101,7 @@ func init() {
 		if int(math.Ceil(sum*-1))*l < 200 {
 			panic("invalid key?")
 		}
+
+		// log.Println(config.Library.Foo)
 	})
 }

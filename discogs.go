@@ -8,7 +8,9 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -37,7 +39,7 @@ func discogsReq(
 	}
 
 	u, _ := url.Parse(ApiPrefix)
-	u = u.JoinPath(urlpath) // no error returned, wtf?
+	u = u.JoinPath(urlpath)
 
 	// map -> []byte -> bytes.Buffer
 
@@ -48,20 +50,18 @@ func discogsReq(
 
 	case "GET", "POST":
 		if data != nil {
-			q := url.Values{}
+			query := url.Values{}
 			for k, v := range data {
-				q.Set(k, v.(string))
+				query.Set(k, v.(string))
 			}
-			u.RawQuery = q.Encode()
-			req, err = http.NewRequest(method, u.String(), nil)
-		} else {
-			req, err = http.NewRequest(method, u.String(), nil)
+			u.RawQuery = query.Encode()
 		}
+		req, err = http.NewRequest(method, u.String(), nil)
 
 	case "PUT":
-		b, err := json.Marshal(data)
-		if err != nil {
-			panic(err)
+		b, mErr := json.Marshal(data)
+		if mErr != nil {
+			panic(mErr)
 		}
 		// https://stackoverflow.com/a/24455606
 		req, err = http.NewRequest(method, u.String(), bytes.NewBuffer(b))
@@ -76,8 +76,8 @@ func discogsReq(
 		panic(err)
 	}
 
-	req.Header.Add("Authorization", "Discogs token="+config.Discogs.Key)
-	req.Header.Add("Cache-Control", "no-cache")
+	req.Header.Set("Authorization", "Discogs token="+config.Discogs.Key)
+	req.Header.Set("Cache-Control", "no-cache")
 
 	log.Println(method, u.RequestURI())
 
@@ -97,7 +97,7 @@ func discogsReq(
 //
 // This is because Discogs stores releases in a variety of representations with
 // subtle differences in schema.
-type Release struct {
+type Release struct { // {{{
 	// The meaning of Id depends on ReleaseType; i.e. Id will be a master
 	// id if ReleaseType = "master", or a 'regular' release id if
 	// ReleaseType = "release"
@@ -109,27 +109,135 @@ type Release struct {
 	Title string
 
 	Artists     []Artist
+	ArtistsSort string `json:"artists_sort"`
 	ResourceUrl string `json:"resource_url"`
-	Year        string // may be empty
+	Year        int    // may be string (in search?)
 
-	MasterId    int    `json:"master_id"`    // may be 0 (if no master)
-	MasterUrl   string `json:"master_url"`   // may be empty (if no master)
-	Primary     int    `json:"main_release"` // only for master releases, otherwise 0
-	ReleaseType string `json:"type"`         // 'release' or 'master'
+	MasterId  int    `json:"master_id"`    // may be 0 (if no master)
+	MasterUrl string `json:"master_url"`   // may be empty (if no master)
+	Primary   int    `json:"main_release"` // master-only
+
+	// Formats []map[string]any // full release
 
 	// search-only (?)
 
-	Genre     []string
-	Community map[string]int
+	Community   map[string]int
+	Genre       []string
+	ReleaseType string `json:"type"` // search-only ('release' or 'master')
 
 	// artist-only
 
-	Artist string // artist-only
-	Format string // ", "-delimited
-	Label  string
-	Role   string // typically "Main"
-	Stats  map[string]map[string]int
+	Artist  string // artist-only
+	Label   string
+	Role    string                    // typically "Main"
+	Stats   map[string]map[string]int // 4 keys: "community"/"stats" -> "in_collection"/"in_wantlist"
+	Formats string                    // ", "-delimited, may be empty
+} // }}}
+
+func (r *Release) inCollection() bool {
+	return r.Stats["user"]["in_collection"] > 0
 }
+
+// requires r.Id (callers should override r.Id with r.Primary for now)
+//
+// does nothing if release already rated
+func (r *Release) rate() int { // {{{
+	noopInt := -1
+	if r.Id == 0 {
+		return noopInt
+	}
+
+	// TODO: leaky abstraction that should be refactored out
+	switch {
+	case r.Primary > 0: // master release
+		r = deserialize(
+			discogsReq("/releases/"+strconv.Itoa(r.Primary), "GET", nil),
+			&Release{},
+		)
+	case r.Artist != "": // artist release
+		r = deserialize(
+			discogsReq("/releases/"+strconv.Itoa(r.Id), "GET", nil),
+			&Release{},
+		)
+	}
+
+	// releases/{r.Id}/rating/{username}
+	urlpath, _ := url.JoinPath(
+		"releases",
+		strconv.Itoa(r.Id),
+		"rating",
+		config.Discogs.Username,
+	)
+
+	resp := discogsReq(urlpath, "GET", nil)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
+	}
+	var currentRating map[string]any
+	// an error here usually means incorrect was Id supplied (i.e. master
+	// id instead of release id)
+	if err := json.Unmarshal(body, &currentRating); err != nil {
+		return noopInt
+	}
+	if int(currentRating["rating"].(float64)) != 0 {
+		log.Println("already rated:", r.Id, r.Title, currentRating)
+		return noopInt
+	}
+
+	fmt.Println(r.Year, "::", r.Artists[0].Name, "::", r.Title)
+	fmt.Printf("https://www.discogs.com/release/%d\n", r.Id)
+	fmt.Print("rating: ")
+	var input string
+
+	// can only exit with ctrl+\, not ctrl+c
+	// empty input is an error; ignore this
+	_, _ = fmt.Scanln(&input)
+
+	var newRating int
+	switch input {
+
+	case "1", "2", "3", "4", "5":
+		newRating, _ = strconv.Atoi(input)
+		discogsReq(
+			urlpath,
+			"PUT",
+			map[string]any{
+				"username":   config.Discogs.Username,
+				"release_id": r.Id,
+				"rating":     newRating,
+			},
+		)
+
+	case "x":
+		// TODO: return some enum variant, to signal to caller to do
+		// something
+		panic("not impl")
+
+	case "":
+		return noopInt
+
+	default:
+		// TODO: should loop until input in [12345] or empty
+		log.Println("invalid rating:", input)
+		return noopInt
+
+	}
+
+	postUrlPath, err := url.JoinPath(
+		"users",
+		config.Discogs.Username,
+		"collection/folders/1/releases",
+		strconv.Itoa(r.Id),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	discogsReq(postUrlPath, "POST", nil)
+	return newRating
+} // }}}
 
 type SearchResult struct {
 	Pagination map[string]any
@@ -152,17 +260,17 @@ func discogsSearch(artist string, album string) SearchResult {
 	return deserialize(resp, SearchResult{})
 }
 
-// If r.Results contains a master release (correctness is not checked), and
-// returns the first master. Otherwise returns the first result (as it is
-// probably still meaningful to callers).
+// If r.Results contains a master release (correctness is not checked), returns
+// the first master. Otherwise returns the first result (as it is probably
+// still meaningful to callers).
 //
-// Note: a second GET call is always performed.
+// Note: a GET call is always performed.
 //
 // If no results are found, returns empty Release (Id = 0); callers should
 // check Release.Id.
 func (r *SearchResult) Primary() Release {
+	// TODO: return *Release (can check nil = clearer intent)
 	if len(r.Results) == 0 {
-		// return 0
 		return Release{}
 	}
 	for i, res := range r.Results {
@@ -175,93 +283,32 @@ func (r *SearchResult) Primary() Release {
 			continue
 		}
 
-		// foo := discogsReq("/masters/"+strconv.Itoa(res.MasterId), "GET", nil)
-		// debugResponse(foo)
-		// panic(1)
-
-		return deserialize(
+		m := deserialize(
 			// TODO: should use joinpath, but i'm lazy to handle errors
 			discogsReq("/masters/"+strconv.Itoa(res.MasterId), "GET", nil),
 			Release{},
 		)
+		// log.Println("foo", m)
+		ensure(len(m.Artists) > 0)
+		return m
+
 	}
-	// return r.Results[0]
 	return deserialize(
 		discogsReq("/releases/"+strconv.Itoa(r.Results[0].Id), "GET", nil),
 		Release{},
 	)
 }
 
-// requires r.Id (callers should override r.Id with r.Primary for now)
-//
-// does nothing if release already rated
-func (r *Release) rate() { // {{{
-	// releases/{r.Id}/rating/{username}
-	urlpath, _ := url.JoinPath(
-		"releases",
-		strconv.Itoa(r.Id),
-		"rating",
-		config.Discogs.Username,
-	)
-
-	resp := discogsReq(urlpath, "GET", nil)
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
-	}
-	var currentRating map[string]any
-	json.Unmarshal(body, &currentRating)
-	if int(currentRating["rating"].(float64)) != 0 {
-		fmt.Println("already rated:", r.Id)
-		return
-	}
-
-	fmt.Print("rating: ")
-	var input string
-	fmt.Scanln(&input) // can only exit with ctrl+\, not ctrl+c
-
-	switch input {
-
-	case "1", "2", "3", "4", "5":
-		newRating, _ := strconv.Atoi(input)
-		discogsReq(
-			urlpath,
-			"PUT",
-			map[string]any{
-				"username":     config.Discogs.Username,
-				"release_r.Id": r.Id,
-				"rating":       newRating,
-			},
-		)
-
-	case "":
-		return
-
-	default:
-		fmt.Println("invalr.Id:", input)
-		return
-
-	}
-
-	postUrlPath, err := url.JoinPath(
-		"users",
-		config.Discogs.Username,
-		"collection/folders/1/releases",
-		strconv.Itoa(r.Id),
-	)
-	if err != nil {
-		panic(err)
-	}
-
-	discogsReq(postUrlPath, "POST", nil)
-} // }}}
-
 type Artist struct {
 	Id          int
-	Name        string          //`json:"title"`
 	ResourceUrl string          `json:"resource_url"`
 	UserData    map[string]bool `json:"user_data"` // in_collection
+
+	// TODO: in search, json key is 'title', otherwise 'name' in all other
+	// contexts. this is very footgun-y, so i need to do something about it
+
+	Name  string
+	Title string // search-only
 }
 
 // additional heuristics/tui will usually be required to select the correct
@@ -277,6 +324,7 @@ func discogsSearchArtist(artist string) []Artist {
 	}{}).Results
 }
 
+// Returns artist releases (which are not full releases)
 func (a *Artist) Releases() []Release {
 	// /artists/{a.id}/releases
 	urlpath, _ := url.JoinPath(
@@ -298,4 +346,39 @@ func (a *Artist) Releases() []Release {
 	return deserialize(resp, struct {
 		Releases []Release
 	}{}).Releases
+}
+
+var IgnoredFormats = map[string]any{
+	// maps are var-only
+
+	"DVD-V":   nil,
+	"Shellac": nil,
+	"Single":  nil,
+}
+
+// Currently only supports artist releases
+func (r *Release) ignored() bool {
+	for _, format := range strings.Split(r.Formats, ", ") {
+		// fmts := r.Formats[0]["descriptions"].([]string)
+		// for _, format := range fmts {
+		if _, ig := IgnoredFormats[format]; ig {
+			return true
+		}
+	}
+	// TODO: fetch actual release
+	return false
+}
+
+// rate all releases
+func (a *Artist) rate() {
+	i := 0
+	for _, rel := range a.Releases() {
+		if i > 100 || rel.inCollection() || rel.Role != "Main" || rel.ignored() {
+			i++
+			continue
+		}
+		log.Println("chk:", filepath.Join(config.Library.Root, rel.Artist, rel.Title))
+		rel.rate()
+		return
+	}
 }
