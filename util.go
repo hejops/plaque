@@ -98,18 +98,6 @@ func debugResponse(resp *http.Response) {
 	fmt.Println(string(x))
 }
 
-// hacky function that uses generics (v1.18) to deserialize a http.Response
-// into an arbitrary target type T, without any error handling whatsoever
-func deserialize[T any](resp *http.Response, t T) (data T) {
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
-	}
-	_ = json.Unmarshal(body, &data) // errors are ignored!
-	return data
-}
-
 var alnumChars = func() map[rune]any {
 	chars := make(map[rune]any)
 	for _, c := range "abcdefghijklmnopqrstuvwxyz" +
@@ -164,7 +152,7 @@ func fuzzySearch(items []string, target string) (matchIdxs []int) {
 	for i, rel := range items {
 		// TODO: if b.input has ' ', strings.Fields and match each word
 		// (b.items -> []map[string]nil?)
-		if strings.Contains(strings.ToLower(rel), target) {
+		if strings.Contains(strings.ToLower(rel), strings.ToLower(target)) {
 			matchIdxs = append(matchIdxs, i)
 		}
 	}
@@ -206,6 +194,51 @@ func sortByYear(albums []string) {
 	})
 }
 
+// Given a middle number n, construct a slice whose first item is n, odd values
+// are increments of n, and even values are decrements of n. The slice has len
+// 2 * width + 1, and all values are constrained in the range [0, limit].
+func surround(middle int, limit int, width int) (ints []int) {
+	if width == 0 {
+		return []int{middle}
+	}
+
+	ints = make([]int, 2*width+1)
+	for idx := range ints {
+		switch {
+		case idx == 0:
+			ints[0] = middle
+		case (idx % 2) == 1:
+			next := middle + (idx+1)/2
+			if next > limit {
+				next -= limit + 1
+			}
+			ints[idx] = next
+		default:
+			prev := middle - (idx+1)/2
+			if prev < 0 {
+				prev += limit + 1
+			}
+			ints[idx] = prev
+		}
+	}
+	// TODO: constrain ends to start,end of eb.artists (i wish go had Option)
+	return ints
+}
+
+// generics {{{
+
+// hacky function that uses generics (v1.18) to deserialize a http.Response
+// into an arbitrary target type T, without any error handling whatsoever
+func deserialize[T any](resp *http.Response, t T) (data T) {
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
+	}
+	_ = json.Unmarshal(body, &data) // errors are ignored!
+	return data
+}
+
 // If target is not found in the dereferenced slice, the slice is unchanged.
 // This is not an in-place operation (due to language constraints?).
 //
@@ -235,3 +268,17 @@ func Map[T any](items []T, f func(T) T) []T {
 	}
 	return out
 }
+
+func anyValue[T comparable](m map[T]bool) bool {
+	if len(m) == 0 {
+		return false
+	}
+	for _, v := range m {
+		if v {
+			return true
+		}
+	}
+	return false
+}
+
+// }}}

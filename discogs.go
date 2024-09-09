@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,7 +22,8 @@ const ApiPrefix = "https://api.discogs.com"
 // instead.
 //
 // data should either be GET query params (in which case all values must be
-// strings), or PUT json data.
+// strings), or PUT json data (in which case values must be correctly typed by
+// the caller).
 func discogsReq(
 	urlpath string,
 	method string,
@@ -138,13 +141,32 @@ func (r *Release) inCollection() bool {
 	return r.Stats["user"]["in_collection"] > 0
 }
 
-// requires r.Id (callers should override r.Id with r.Primary for now)
+// TODO: private/namespace? these errors are only relevant for 1 function.
+// enums address this somewhat, but cannot be nil'd
+var (
+	NotFound     = errors.New("Release not found")
+	NotRated     = errors.New("Release not rated")
+	AlreadyRated = errors.New("Release already rated") // in Rust, would contain an inner value
+	Unhandled    = errors.New("Failed to parse JSON (probably)")
+
+	// i would have preferred an enum, but an int cannot be nil'd, and
+	// leads to unclear intent
+	// https://old.reddit.com/r/golang/comments/fg6527/simple_error_enum/fk53no5/
+)
+
+// type rateError int
 //
-// does nothing if release already rated
-func (r *Release) rate() int { // {{{
-	noopInt := -1
+// const (
+// 	NotFound rateError = iota
+// 	NotRated
+// 	AlreadyRated
+// 	Unhandled
+// )
+
+func (r *Release) rate() (int, error) { // {{{
+	// noopInt := -1
 	if r.Id == 0 {
-		return noopInt
+		return 0, NotFound
 	}
 
 	// TODO: leaky abstraction that should be refactored out
@@ -179,11 +201,11 @@ func (r *Release) rate() int { // {{{
 	// an error here usually means incorrect was Id supplied (i.e. master
 	// id instead of release id)
 	if err := json.Unmarshal(body, &currentRating); err != nil {
-		return noopInt
+		return 0, Unhandled
 	}
 	if int(currentRating["rating"].(float64)) != 0 {
 		log.Println("already rated:", r.Id, r.Title, currentRating)
-		return noopInt
+		return 0, AlreadyRated
 	}
 
 	fmt.Println(r.Year, "::", r.Artists[0].Name, "::", r.Title)
@@ -216,12 +238,12 @@ func (r *Release) rate() int { // {{{
 		panic("not impl")
 
 	case "":
-		return noopInt
+		return 0, NotRated
 
 	default:
 		// TODO: should loop until input in [12345] or empty
 		log.Println("invalid rating:", input)
-		return noopInt
+		return 0, NotRated
 
 	}
 
@@ -236,7 +258,7 @@ func (r *Release) rate() int { // {{{
 	}
 
 	discogsReq(postUrlPath, "POST", nil)
-	return newRating
+	return newRating, nil
 } // }}}
 
 type SearchResult struct {
@@ -284,7 +306,7 @@ func (r *SearchResult) Primary() Release {
 		}
 
 		m := deserialize(
-			// TODO: should use joinpath, but i'm lazy to handle errors
+			// TODO: should use url.joinpath, but i'm lazy to handle errors
 			discogsReq("/masters/"+strconv.Itoa(res.MasterId), "GET", nil),
 			Release{},
 		)
@@ -307,25 +329,14 @@ type Artist struct {
 	// TODO: in search, json key is 'title', otherwise 'name' in all other
 	// contexts. this is very footgun-y, so i need to do something about it
 
-	Name  string
+	Name  string // all other contexts
 	Title string // search-only
 }
 
-// additional heuristics/tui will usually be required to select the correct
-// artist; this is left to callers
-func discogsSearchArtist(artist string) []Artist {
-	resp := discogsReq(
-		"/database/search",
-		"GET",
-		map[string]any{"q": alnum(artist), "type": "artist"},
-	)
-	return deserialize(resp, struct {
-		Results []Artist
-	}{}).Results
-}
-
 // Returns artist releases (which are not full releases)
-func (a *Artist) Releases() []Release {
+//
+// Requires GET
+func (a Artist) Releases() []Release {
 	// /artists/{a.id}/releases
 	urlpath, _ := url.JoinPath(
 		"artists",
@@ -369,16 +380,32 @@ func (r *Release) ignored() bool {
 	return false
 }
 
+func checkDir(artist string, album string) bool {
+	dirs, err := os.ReadDir(filepath.Join(config.Library.Root, artist))
+	if err != nil {
+		return false
+	}
+	for _, dir := range dirs {
+		if strings.HasPrefix(dir.Name(), album) {
+			fmt.Println(filepath.Join(artist, dir.Name()))
+			return true
+		}
+	}
+	return false
+}
+
 // rate all releases
-func (a *Artist) rate() {
+func (a Artist) rate() {
 	i := 0
 	for _, rel := range a.Releases() {
 		if i > 100 || rel.inCollection() || rel.Role != "Main" || rel.ignored() {
 			i++
 			continue
 		}
-		log.Println("chk:", filepath.Join(config.Library.Root, rel.Artist, rel.Title))
-		rel.rate()
+		checkDir(a.Name, rel.Title)
+		if _, err := rel.rate(); errors.Is(err, AlreadyRated) {
+			continue
+		}
 		return
 	}
 }

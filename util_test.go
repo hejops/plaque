@@ -1,7 +1,10 @@
+//
+
 package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"log"
 	"os"
 	"strings"
@@ -11,6 +14,12 @@ import (
 )
 
 func TestUtil(t *testing.T) {
+	strData := map[string]any{"1": "1"}
+	intData := map[string]any{"1": 1}
+	strBytes, _ := json.Marshal(strData)
+	intBytes, _ := json.Marshal(intData)
+	assert.NotEqual(t, strBytes, intBytes)
+
 	a, b := movePerfsToArtist("a", "b [c]")
 	assert.Equal(t, a, "a c")
 	assert.Equal(t, b, "b")
@@ -55,6 +64,11 @@ func TestUtil(t *testing.T) {
 	// 	&ints,
 	// 	&removed,
 	// )
+
+	assert.Equal(t, surround(0, 5, 2), []int{0, 1, 5, 2, 4})
+	assert.Equal(t, surround(0, 6, 2), []int{0, 1, 6, 2, 5})
+	assert.Equal(t, surround(1, 6, 2), []int{1, 2, 0, 3, 6})
+	assert.Equal(t, surround(6, 6, 2), []int{6, 0, 5, 1, 4})
 }
 
 func BenchmarkAlnum(b *testing.B) {
@@ -102,5 +116,5 @@ func BenchmarkNewScanner(b *testing.B) {
 	if sc.Err() != nil {
 		log.Fatalln(err)
 	}
-	// _ = relpaths
+	_ = relpaths
 }

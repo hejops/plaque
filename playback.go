@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -45,7 +46,7 @@ func getResumes() *[]string {
 		file := line[2:] // # "# "
 		if fi, e := os.Stat(file); e == nil &&
 			!fi.IsDir() &&
-			strings.Contains(file, config.Library.Root) {
+			strings.HasPrefix(file, config.Library.Root) {
 			rel, _ := filepath.Rel(config.Library.Root, filepath.Dir(file))
 			resumes = append(resumes, rel)
 		}
@@ -174,7 +175,7 @@ func (c *postPlaybackCmd) Run() error {
 	}
 
 	rel := res.Primary()
-	if rel.rate() == 1 &&
+	if rating, _ := rel.rate(); rating == 1 &&
 		// guard rail to prevent deleting classical artists
 		album[len(album)-1] != ']' {
 		p := filepath.Join(config.Library.Root, artist)
@@ -192,19 +193,12 @@ func (c *postPlaybackCmd) Run() error {
 
 	}
 
-	artists := discogsSearchArtist(artist)
-	if len(artists) > 0 {
-		// artists[0].rate()
-		for _, a := range artists {
-			// log.Println("artist:", a.Title, a.UserData)
-			if !a.UserData["in_collection"] {
-				continue
-			}
-			log.Println("rating releases of", a.Title)
-			a.rate()
-			break // do we need to try more than 1?
-		}
-	}
+	// TODO: this is not very ergonomic; but wrapping the returned []Artist
+	// in a struct seems even more annoying
+	art := browseArtists(discogsSearchArtist(artist))
+	// art := discogsSearchArtist(artist).browse()
+	art.Name = artist
+	art.rate()
 
 	return nil
 }
@@ -213,6 +207,15 @@ func (c *postPlaybackCmd) SetStdin(io.Reader)  {}
 func (c *postPlaybackCmd) SetStdout(io.Writer) {}
 
 func play(relpath string) tea.Cmd {
+	timer := time.NewTimer(time.Second * 2)
+	defer timer.Stop()
+	go func() {
+		// fmt.Println("please wait...", <-timer.C)
+		// fmt won't work outside View
+		log.Println("please wait...", <-timer.C)
+	}()
+
+	// TODO: online mode (search ytm)
 	path := filepath.Join(config.Library.Root, relpath)
 	mpvCmd := exec.Command("mpv", append(mpvArgs, path)...)
 	log.Println("playing:", path)

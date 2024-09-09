@@ -5,8 +5,8 @@
 //	2. Artists: immediate children directories of root, generated via traversal
 //	3. Albums: directories under an artist (i.e. depth 2)
 //
-// The lists are implemented as a simple fzf-like menu with basic (non-fuzzy)
-// filtering.
+// The lists are implemented as a simple fzf-like menu with basic non-fuzzy
+// substring matching.
 //
 // For simplicity of rendering, all items must be valid directories, relative
 // to the library root. On selecting an item, the Browser transitions to the
@@ -28,6 +28,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path"
@@ -42,6 +43,11 @@ import (
 )
 
 // https://leg100.github.io/en/posts/building-bubbletea-programs/
+
+var IsSelected = map[bool]string{
+	true:  "→",
+	false: " ",
+}
 
 var IsQueued = map[bool]string{
 	true:  "Q",
@@ -61,8 +67,8 @@ const (
 type Browser struct {
 	mode     Mode
 	items    []string            // valid relpaths
+	queued   map[string]bool     // keys correspond to items
 	previews map[string][]string // keys correspond to items
-	// queued   map[string]any      // subset of items that are queued; only used in Albums mode
 
 	c      chan string
 	noquit bool
@@ -75,7 +81,6 @@ type Browser struct {
 	cursor  int
 	input   string
 	matches []int
-	queued  map[int]any // subset of items that are queued; only used in Albums mode
 }
 
 // All items must be valid relpaths (relative to root)
@@ -115,22 +120,26 @@ func newBrowser(items []string, mode Mode) *Browser {
 // 	artist string
 // }
 
-// resume should only be true on the first invocation (i.e. on startup)
-func queueBrowser(resume bool) *Browser {
-	// cold disk: print a 'waiting' msg after 2s elapsed
-	timer := time.NewTimer(time.Second * 2)
-	defer timer.Stop()
-	go func() {
-		// fmt.Println("please wait...", <-timer.C)
-		log.Println("cold disk...", <-timer.C)
-	}()
+var firstRun = true
+
+func queueBrowser( /*resume bool*/ ) (b *Browser) {
+	// resume should only be true on the first invocation (i.e. on startup)
+
+	if firstRun {
+		timer := time.NewTimer(time.Second * 2)
+		defer timer.Stop()
+		go func() {
+			fmt.Println("please wait...", <-timer.C)
+			// log.Println("cold disk...", <-timer.C)
+		}()
+	}
 
 	resumes := getResumes()
-	var b *Browser
 	switch {
-	case resume && resumes != nil:
+	case firstRun && resumes != nil:
 		b = newBrowser(*resumes, Queue)
 		b.noquit = true
+		firstRun = false
 	default:
 		b = newBrowser(getQueue(QueueCount), Queue)
 	}
@@ -143,13 +152,14 @@ func artistBrowser() *Browser {
 	return newBrowser(items, Artists)
 }
 
+// Browser.items will be sorted by year.
 func albumsBrowser(artist string) *Browser {
 	// more complex since we need to check queue and populate the `queued`
 	// field
 
-	m := make(map[string]any)
+	allQueued := make(map[string]any)
 	for _, x := range getQueue(0) {
-		m[x] = nil
+		allQueued[x] = nil
 	}
 
 	// TODO: the rest is i/o; could be goroutine'd?
@@ -163,24 +173,24 @@ func albumsBrowser(artist string) *Browser {
 	items := []string{}
 	// queued := make(map[string]any)
 	// int keys are much easier to index (for View), but require correct sort
-	queued := make(map[int]any)
+	// queued := make(map[int]bool)
+	queued := make(map[string]bool)
 	previews := make(map[string][]string)
-	for i, alb := range albums {
+	for _, alb := range albums {
 		// newBrowser requires valid relpaths
 		relpath := filepath.Join(artist, alb)
 		fullpath := filepath.Join(config.Library.Root, relpath)
 		items = append(items, relpath)
 
-		if _, q := m[relpath]; q {
-			// queued[relpath] = nil
-			queued[i] = nil
+		_, q := allQueued[relpath]
+		queued[relpath] = q
 
-			p, err := descend(fullpath)
-			if err != nil {
-				panic(err)
-			}
-			previews[relpath] = p
+		p, err := descend(fullpath)
+		if err != nil {
+			panic(err)
 		}
+		previews[relpath] = p
+
 	}
 
 	b := newBrowser(items, Albums)
@@ -207,11 +217,6 @@ func (b *Browser) updateSearch(msg tea.KeyMsg) {
 
 	default:
 		b.matches = fuzzySearch(b.items, b.input)
-		// if b.input == "a" {
-		// 	log.Println("foo", b.input, b.matches, b.items, b.cursor)
-		// 	time.Sleep(time.Second)
-		// }
-
 	}
 
 	if len(b.matches) > 0 {
@@ -219,38 +224,24 @@ func (b *Browser) updateSearch(msg tea.KeyMsg) {
 	}
 }
 
-// tea.Model interface; the required methods cannot use pointer receivers
-// TODO: (why not?)
-
 func (b *Browser) Init() tea.Cmd {
-	// note: mutating b here does not ever propagate to Update!
-	// b.init_test()
+	if b.mode == Queue {
+		go func() {
+			previews := make(map[string][]string)
+			for _, item := range b.items {
+				p, err := descend(item)
+				if err != nil {
+					continue
+				}
+				previews[item] = p
+
+			}
+			b.previews = previews
+		}()
+	}
 
 	return nil
-
-	// return tea.Sequence(
-	// 	func() tea.Msg {
-	// 		b.init_test()
-	// 		return nil
-	// 	},
-	// )
 }
-
-// start program with blank model, then do i/o in Init?
-// https://github.com/kindlyops/vbs/blob/9a57beb19b68928966a64d55f0b9da752e779953/cmd/play.go#L208
-// func (b *Browser) init_test() {
-// 	resumes := getResumes()
-// 	switch resumes {
-// 	case nil:
-// 		b = newBrowser(*resumes, Queue)
-// 		b.noquit = true
-// 	default:
-// 		b = queueBrowser()
-// 	}
-//
-// 	log.Println("init done:", b)
-// 	// return b
-// }
 
 func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 	// log.Println("msg:", msg) // not terribly informative
@@ -265,6 +256,7 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 	case tea.WindowSizeMsg: // only triggered when window resized?
 		b.width = msg.Width
 		b.height = msg.Height
+		return b, tea.ClearScreen
 
 	case tea.KeyMsg:
 
@@ -291,14 +283,7 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 
 			// allow just going back to Queue
 			if b.noquit {
-				switch b.mode {
-				case Albums:
-					return queueBrowser(false), nil
-				case Queue:
-					nb := queueBrowser(false)
-					nb.noquit = false
-					return nb, nil
-				}
+				return queueBrowser(), nil
 			}
 
 			log.Println("quitting")
@@ -324,14 +309,6 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 			b.cursor = 0
 			b.offset += b.height
 
-			// if b.cursor > b.height-1 {
-			// 	// b.cursor = len(b.matches) - 1
-			// 	// b.offset = b.cursor //- b.height
-			// 	b.offset = b.height
-			// 	// b.cursor = 0
-			// }
-			// // return b, nil
-
 		case "down", "ctrl+j":
 			b.cursor++
 			if b.cursor > len(b.matches)-1 {
@@ -348,24 +325,14 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 				return b, nil // do nothing
 			}
 
-			// return nil, func() tea.Msg {
-			// 	time.Sleep(time.Minute)
-			// 	return nil
-			// }
-
 			return b.getNewState()
 
-			// // does this make sense?
-			// return b, func() tea.Msg {
-			// 	b.getNewState()
-			// 	return nil
-			// }
 		}
+		// default:
+		// 	return b, nil
 	}
 
-	// ensure(len(b.items) > 0)
-
-	// panic(msg)
+	// panic("unreachable")
 	return b, nil
 } // }}}
 
@@ -385,14 +352,14 @@ func (b *Browser) getNewState() (*Browser, tea.Cmd) {
 		artist := strings.Split(sel, "/")[0]
 
 		nb := albumsBrowser(artist)
+
 		// allow user to back out of the selection without quitting the
 		// program
 		nb.noquit = true
 
-		// sel is (actually) removed from queue after play, but nb will
-		// still have it, so we 'preempt'
-		// delete(nb.queued, sel)
-		delete(nb.queued, pos)
+		// sel will be removed from queue after play, but we need to
+		// preempt that removal here
+		nb.queued[sel] = false
 
 		// after `play`, start View in Albums mode
 		// TODO: detect if sel was deleted (in which case, go back to Queue)
@@ -409,7 +376,7 @@ func (b *Browser) getNewState() (*Browser, tea.Cmd) {
 			log.Println("queued:", sel)
 		}
 
-		return queueBrowser(false), nil
+		return queueBrowser(), nil
 
 	default:
 		panic("Invalid state")
@@ -437,21 +404,16 @@ func (b *Browser) View() string {
 		return "no matches; please clear input"
 	}
 
-	IsSelected := map[bool]string{
-		true:  "→",
-		false: " ",
-	}
-
 	sel := b.items[b.matches[b.cursor]]
 
-	leftItems := list.New( /* b.items */ ).Enumerator(func(items list.Items, index int) string {
-		indicator := IsSelected[index == b.cursor] // "> [...]"
-		if b.mode == Albums {
-			_, q := b.queued[index]
-			indicator = indicator + " " + IsQueued[q] // "> Q [...]"
-		}
-		return indicator
-	})
+	// TODO: another struct field?
+	enu := func(_ list.Items, index int) string {
+		return IsSelected[index == b.cursor]
+	}
+	leftItems := list.New().Enumerator(enu)
+
+	// TODO: another (Albums-only) struct field?
+	anyQueued := anyValue(b.queued)
 
 	for i, idx := range b.matches {
 		if i < b.offset {
@@ -459,12 +421,21 @@ func (b *Browser) View() string {
 		}
 		item := b.items[idx] // idx is the actual index that points to the item
 
-		switch b.mode {
-		case Albums:
-			// _, q := b.queued[item]
-			// item = IsQueued[q] + " " + path.Base(item)
+		switch {
+		case b.mode == Albums:
 			item = path.Base(item)
+			fallthrough
+		case anyQueued:
+			item = IsQueued[b.queued[item]] + " " + item
 		}
+
+		// if b.mode == Albums {
+		// 	base := path.Base(item)
+		// 	// doing this in Enumerator is non-trivial
+		// 	if showQueue {
+		// 		item = IsQueued[b.queued[item]] + " " + base
+		// 	}
+		// }
 
 		leftItems.Item(item) // inplace
 	}
