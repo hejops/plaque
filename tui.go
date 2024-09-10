@@ -412,8 +412,7 @@ func (b *Browser) View() string {
 	}
 	leftItems := list.New().Enumerator(enu)
 
-	// TODO: another (Albums-only) struct field?
-	anyQueued := anyValue(b.queued)
+	anyQueued := b.mode == Albums && anyValue(b.queued)
 
 	for i, idx := range b.matches {
 		if i < b.offset {
@@ -422,22 +421,18 @@ func (b *Browser) View() string {
 		item := b.items[idx] // idx is the actual index that points to the item
 
 		switch {
-		case b.mode == Albums:
-			item = path.Base(item)
-			fallthrough
 		case anyQueued:
-			item = IsQueued[b.queued[item]] + " " + item
+			base := path.Base(item)
+			item = IsQueued[b.queued[item]] + " " + base
+			leftItems.Item(item) // inplace
+
+		case b.mode == Albums:
+			base := path.Base(item)
+			leftItems.Item(base)
+
+		default:
+			leftItems.Item(item)
 		}
-
-		// if b.mode == Albums {
-		// 	base := path.Base(item)
-		// 	// doing this in Enumerator is non-trivial
-		// 	if showQueue {
-		// 		item = IsQueued[b.queued[item]] + " " + base
-		// 	}
-		// }
-
-		leftItems.Item(item) // inplace
 	}
 
 	rightItems := list.New().Enumerator(func(_ list.Items, _ int) string { return "" })
