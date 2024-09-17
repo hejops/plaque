@@ -3,9 +3,14 @@
 package main
 
 import (
-	"log"
 	"slices"
 	"strings"
+	"sync"
+)
+
+var (
+	Bigrams    map[string][]int
+	bigramOnce sync.Once
 )
 
 func makeBigrams(items []string) map[string][]int {
@@ -19,13 +24,9 @@ func makeBigrams(items []string) map[string][]int {
 			}
 		}
 	}
-	log.Println(len(big))
+	// log.Println(len(big))
 	return big
 }
-
-// TODO: if b.input has ' ', strings.Fields and match each word (b.items ->
-// []map[string]nil?)
-// might as well impl Aho-Corasick or trigram at that point
 
 // Given a slice of items, return a slice of indices of each item that contains
 // the target word. Normalisation is applied.
@@ -59,9 +60,26 @@ func searchSubstringCache(items []string, target string, inputCache map[string][
 	}
 } // }}}
 
-// 8x speedup, after constructing all the 676*len(items) bigrams (which takes
-// about 1.5 s for 37 k items). Note that searches will be inherently fuzzy.
+// In real world usage, this is an 8x speedup over searchSubstring.
+//
+// The caveat: this function relies on the global Bigrams map, which is
+// relatively expensive (676 bigrams * 37 k items = 1.5 s), and calculated only
+// once for the lifetime of the program.
+
+// Note that because searches will be inherently fuzzy, false positives may be
+// returned.
 func searchSubstringBigram(items []string, target string) []int {
+	// if we are generating the bigrams here, it is already too late; user
+	// input will usually be faster than 1.5s
+	//
+	// bigramOnce.Do(func() {
+	// 	go func() {
+	// 		t := time.Now()
+	// 		Bigrams = makeBigrams(items)
+	// 		log.Println("bigram construction took", time.Since(t).Seconds())
+	// 	}()
+	// })
+
 	if len(target) < 2 {
 		return searchSubstring(items, target)
 	}
