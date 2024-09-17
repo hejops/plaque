@@ -1,3 +1,5 @@
+// TUI for basic file/directory navigation
+//
 // The Browser can exist in one of three states (Modes). Each state leverages
 // the same list-based TUI to present a (different) set of items to the user:
 //
@@ -34,6 +36,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -120,10 +123,15 @@ func newBrowser(items []string, mode Mode) *Browser {
 // 	artist string
 // }
 
-var firstRun = true
+var (
+	firstRun   = true
+	Bigrams    map[string][]int
+	bigramOnce sync.Once
+)
 
-func queueBrowser( /*resume bool*/ ) (b *Browser) {
+func queueBrowser() (b *Browser) {
 	// resume should only be true on the first invocation (i.e. on startup)
+	// TODO: sync.Once seems more idiomatic
 
 	if firstRun {
 		timer := time.NewTimer(time.Second * 2)
@@ -149,6 +157,14 @@ func queueBrowser( /*resume bool*/ ) (b *Browser) {
 
 func artistBrowser() *Browser {
 	items, _ := descend(config.Library.Root)
+	bigramOnce.Do(func() {
+		go func() {
+			// about 1.5 s for 37 k items
+			t := time.Now()
+			Bigrams = makeBigrams(items)
+			log.Println("bigram construction took", time.Since(t).Seconds())
+		}()
+	})
 	return newBrowser(items, Artists)
 }
 
@@ -171,16 +187,15 @@ func albumsBrowser(artist string) *Browser {
 	sortByYear(albums)
 
 	items := []string{}
-	// queued := make(map[string]any)
 	// int keys are much easier to index (for View), but require correct sort
-	// queued := make(map[int]bool)
+	// // queued := make(map[int]bool)
 	queued := make(map[string]bool)
 	previews := make(map[string][]string)
 	for _, alb := range albums {
 		// newBrowser requires valid relpaths
 		relpath := filepath.Join(artist, alb)
 		fullpath := filepath.Join(config.Library.Root, relpath)
-		items = append(items, relpath)
+		items = append(items, relpath) // small len, growing slice is probably fine
 
 		_, q := allQueued[relpath]
 		queued[relpath] = q
@@ -200,7 +215,7 @@ func albumsBrowser(artist string) *Browser {
 	return b
 }
 
-func (b *Browser) updateSearch(msg tea.KeyMsg) {
+func (b *Browser) updateSearch() {
 	// https://github.com/antonmedv/walk/blob/ba821ed78f31e0ebd46eeef19cfe642fc1ec4330/main.go#L427
 	// note the pointer; we are mutating Browser
 
@@ -213,10 +228,16 @@ func (b *Browser) updateSearch(msg tea.KeyMsg) {
 
 	case b.mode == Albums:
 		// b.items is relpath, but we want basenames
-		b.matches = fuzzySearch(Map(b.items, filepath.Base), b.input)
+		b.matches = searchSubstring(Map(b.items, filepath.Base), b.input)
+
+	case len(b.items) > 10000 && len(Bigrams) == 676:
+		// note: strings.Contains uses Rabin-Karp (O(n)). without
+		// resorting to faster string search algos (e.g. KMP/BM/AC), a
+		// simple cached map of bigrams is a fairly easy 8x speedup
+		b.matches = searchSubstringBigram(b.items, b.input)
 
 	default:
-		b.matches = fuzzySearch(b.items, b.input)
+		b.matches = searchSubstring(b.items, b.input)
 	}
 
 	if len(b.matches) > 0 {
@@ -224,6 +245,7 @@ func (b *Browser) updateSearch(msg tea.KeyMsg) {
 	}
 }
 
+// b.items must already have been initialised.
 func (b *Browser) Init() tea.Cmd {
 	if b.mode == Queue {
 		go func() {
@@ -266,9 +288,9 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 
 	case tea.KeyMsg:
 
-		if msg.Type == tea.KeyRunes {
+		if msg.Type == tea.KeyRunes || msg.String() == " " {
 			b.input += string(msg.Runes)
-			b.updateSearch(msg)
+			b.updateSearch()
 			return b, nil
 		}
 
@@ -280,7 +302,7 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 		case "ctrl+w":
 			b.input = "" // TODO: delete last word
 			b.cursor = 0 // fzf resets cursor pos
-			b.updateSearch(msg)
+			b.updateSearch()
 			return b, nil
 
 		case "ctrl+c", "esc", "ctrl+\\":
@@ -292,13 +314,15 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 				return queueBrowser(), nil
 			}
 
+			// TODO: why so slow?
+
 			log.Println("quitting")
 			return b, tea.Quit // graceful exit
 
 		case "backspace":
 			if len(b.input) > 0 {
 				b.input = b.input[:len(b.input)-1]
-				b.updateSearch(msg)
+				b.updateSearch()
 			}
 
 		case "up", "ctrl+k":
@@ -325,6 +349,10 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 			// 	b.offset = b.cursor - b.height
 			// }
 
+		// case "ctrl+t":
+		// 	// TODO: queue -> artists, else -> queue
+		// 	return b.getNewState()
+
 		// https://github.com/antonmedv/walk/blob/ba821ed78f31e0ebd46eeef19cfe642fc1ec4330/main.go#L259 (?)
 		case "enter":
 			if len(b.matches) == 0 {
@@ -342,44 +370,52 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 	return b, nil
 } // }}}
 
+// Artists -> Albums
+// Queue -> Albums
+// Albums -> play -> Queue
 func (b *Browser) getNewState() (*Browser, tea.Cmd) {
 	pos := b.matches[b.cursor]
 	sel := b.items[pos] // relpath
 	switch b.mode {
 	case Artists:
-		// return albumsBrowser(sel), nil
-		return albumsBrowser(sel), tea.ClearScreen
+		return albumsBrowser(sel), nil
+		// return albumsBrowser(sel), tea.ClearScreen
 
 	case Queue:
 
 		// note: we need to split artist here (even though we do it
 		// again in `play`)
 		ensure(strings.Contains(sel, "/"))
-		artist := strings.Split(sel, "/")[0]
 
+		// `play`, then start View in Albums mode
+		artist := strings.Split(sel, "/")[0]
 		nb := albumsBrowser(artist)
 
 		// allow user to back out of the selection without quitting the
 		// program
 		nb.noquit = true
 
-		// sel will be removed from queue after play, but we need to
+		// sel will be removed from queue -after- play, but we need to
 		// preempt that removal here
 		nb.queued[sel] = false
 
-		// after `play`, start View in Albums mode
 		// TODO: detect if sel was deleted (in which case, go back to Queue)
 		return nb, play(sel)
 
 	case Albums:
 		// add selected item to queue (if it exists), then go back to
-		// Queue
+		// Queue (or exit)
 		if _, err := os.Stat(filepath.Join(config.Library.Root, sel)); err == nil {
 			q := getQueue(0)
 			nq := append(q, sel)
 			ensure(len(nq)-len(q) == 1)
 			writeQueue(nq)
 			log.Println("queued:", sel)
+		}
+
+		// TODO: should be propagated via Browser field or something
+		if mpvRunning() {
+			os.Exit(0)
 		}
 
 		return queueBrowser(), nil
@@ -416,6 +452,10 @@ func (b *Browser) View() string {
 	enu := func(_ list.Items, index int) string {
 		return IsSelected[index == b.cursor]
 	}
+	// note: we use the simpler lipgloss/list; consider trying the more
+	// feature-rich bubbles/list. filtering is built in to the list itself,
+	// so we don't have to keep it in the Browser
+	// https://github.com/charmbracelet/bubbles/blob/master/list/list.go
 	leftItems := list.New().Enumerator(enu)
 
 	anyQueued := b.mode == Albums && anyValue(b.queued)

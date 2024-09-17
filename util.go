@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -73,9 +72,10 @@ func descend(base string) ([]string, error) {
 		// log.Println("not a valid dir:", base)
 		return []string{}, err
 	}
-	ch := []string{}
-	for _, e := range entries {
-		ch = append(ch, e.Name())
+	// ch := []string{}
+	ch := make([]string, len(entries))
+	for i, e := range entries {
+		ch[i] = e.Name()
 	}
 	return ch, nil
 }
@@ -84,19 +84,19 @@ func descend(base string) ([]string, error) {
 // schema
 //
 // Warning: resp will be closed
-func debugResponse(resp *http.Response) {
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
-	}
-	var data map[string]any
-	if err := json.Unmarshal(body, &data); err != nil {
-		panic(err)
-	}
-	x, _ := json.MarshalIndent(data, "", "    ")
-	fmt.Println(string(x))
-}
+// func debugResponse(resp *http.Response) {
+// 	defer resp.Body.Close()
+// 	body, err := io.ReadAll(resp.Body)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	var data map[string]any
+// 	if err := json.Unmarshal(body, &data); err != nil {
+// 		panic(err)
+// 	}
+// 	x, _ := json.MarshalIndent(data, "", "    ")
+// 	fmt.Println(string(x))
+// }
 
 var alnumChars = func() map[rune]any {
 	chars := make(map[rune]any)
@@ -144,19 +144,6 @@ func alnum(s string) string {
 		}
 	}
 	return string(out)
-}
-
-// Given a slice of items, return a slice of indices of each item that contains
-// the target word
-func fuzzySearch(items []string, target string) (matchIdxs []int) {
-	for i, rel := range items {
-		// TODO: if b.input has ' ', strings.Fields and match each word
-		// (b.items -> []map[string]nil?)
-		if strings.Contains(strings.ToLower(rel), strings.ToLower(target)) {
-			matchIdxs = append(matchIdxs, i)
-		}
-	}
-	return matchIdxs
 }
 
 // "a", "b [c]"
@@ -229,7 +216,7 @@ func surround(middle int, limit int, width int) (ints []int) {
 
 // hacky function that uses generics (v1.18) to deserialize a http.Response
 // into an arbitrary target type T, without any error handling whatsoever
-func deserialize[T any](resp *http.Response, t T) (data T) {
+func deserialize[T any](resp *http.Response, _ T) (data T) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -279,6 +266,16 @@ func anyValue[T comparable](m map[T]bool) bool {
 		}
 	}
 	return false
+}
+
+func intersect[T comparable](a []T, b []T) []T {
+	var inter []T
+	for _, x := range a {
+		if slices.Contains(b, x) {
+			inter = append(inter, x)
+		}
+	}
+	return inter
 }
 
 // }}}
