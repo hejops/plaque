@@ -118,3 +118,72 @@ func BenchmarkNewScanner(b *testing.B) {
 	}
 	_ = relpaths
 }
+
+var (
+	randStrings = make([]string, 10000)
+	sameStrings = make([]string, 10000)
+	artists     []string
+)
+
+func init() {
+	x := rand.New(rand.NewSource(1))
+	_ = x
+
+	// tl;dr: bigrams are exceptional at random inputs, but still great at
+	// real world inputs
+
+	// BenchmarkSubstringSearchRKLower-12      1000000000      0.0008277 ns/op
+	// BenchmarkSubstringSearchBigram-12       1000000000      0.0000006 ns/op
+
+	// for i := range len(randStrings) {
+	// 	var s []rune
+	// 	for range 10 {
+	// 		s = append(s, rune(65+x.Intn(57)))
+	// 	}
+	// 	randStrings[i] = string(s)
+	// }
+	// Bigrams = makeBigrams(randStrings)
+
+	// BenchmarkSubstringSearchRKLower-12      1000000000      0.002818 ns/op
+	// BenchmarkSubstringSearchBigram-12       1000000000      0.0000051 ns/op
+
+	var s []rune
+	for range 100 {
+		s = append(s, rune(65+x.Intn(57)))
+	}
+	for i := range len(sameStrings) {
+		sameStrings[i] = string(s)
+	}
+	Bigrams = makeBigrams(sameStrings)
+
+	// BenchmarkSubstringSearchRKLower-12      1000000000      0.002496 ns/op
+	// BenchmarkSubstringSearchBigram-12       1000000000      0.0001683 ns/op
+
+	// artists, _ = descend(config.Library.Root)
+	// Bigrams = makeBigrams(artists)
+}
+
+func benchmarkWrapper(f func([]string, string) []int) {
+	// f(randStrings, "ab")
+	f(sameStrings, "jp")
+	// f(artists, "johann")
+}
+
+func BenchmarkSubstringSearchRKLower(b *testing.B) { benchmarkWrapper(searchSubstring) }
+
+func BenchmarkSubstringSearchBigram(b *testing.B) { benchmarkWrapper(searchSubstringBigram) }
+
+func TestSubstring(t *testing.T) {
+	fmt.Println(sameStrings[0])
+	for _, x := range []struct {
+		needle string
+		count  int
+		countB int
+	}{
+		{needle: "jp", count: 10000, countB: 10000},
+		{needle: "xoba", count: 0, countB: 10000}, // fuzzy!
+	} {
+		assert.Len(t, searchSubstring(sameStrings, x.needle), x.count, x.needle)
+		assert.Len(t, searchSubstringBigram(sameStrings, x.needle), x.countB, x.needle)
+	}
+}
