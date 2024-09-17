@@ -253,10 +253,16 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 	switch msg := msg.(type) {
 
 	// https://github.com/charmbracelet/bubbletea/discussions/818#discussioncomment-6914769
-	case tea.WindowSizeMsg: // only triggered when window resized?
-		b.width = msg.Width
-		b.height = msg.Height
-		return b, tea.ClearScreen
+	case tea.WindowSizeMsg:
+		if msg.Width != b.width {
+			// first Update call always involves a WindowSizeMsg,
+			// even when dims are correctly initialised. allowing a
+			// ClearScreen leads to an unnecessary (and unsightly)
+			// re-render
+			b.width = msg.Width
+			b.height = msg.Height
+			return b, tea.ClearScreen
+		}
 
 	case tea.KeyMsg:
 
