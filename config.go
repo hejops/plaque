@@ -3,8 +3,11 @@
 package main
 
 import (
+	"fmt"
+	"io/fs"
 	"log"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,17 +51,35 @@ var (
 	MpvArgs       = strings.Fields("--mute=no --no-audio-display --pause=no --start=0%")
 )
 
-func getAbsPath(rel string) string {
-	abs := filepath.Join(filepath.Base(os.Args[0]), rel)
+// Get path of p, relative to the binary. Returns error if p does not exist.
+func getAbsPath(p string) (string, error) {
+	prog, _ := os.Executable()
+
+	abs := filepath.Join(filepath.Dir(prog), p)
 	if _, err := os.Stat(abs); err != nil {
-		panic(err)
+		return "", err
 	}
-	return abs
+	return abs, nil
+}
+
+func generateQueue(n int) []string {
+	var all []string
+	_ = filepath.WalkDir(config.Library.Root, func(path string, d fs.DirEntry, err error) error {
+		rel, _ := filepath.Rel(config.Library.Root, path)
+		if strings.Count(rel, "/") == 1 {
+			all = append(all, rel)
+		}
+		return nil
+	})
+
+	items := make([]string, n)
+	for i, r := range rand.Perm(len(all) - 1)[:n] {
+		items[i] = all[r]
+	}
+	return items
 }
 
 func init() {
-	// TODO: if mpv running, exit
-
 	// `init` is reserved keyword -- https://go.dev/ref/spec#Package_initialization
 	//
 	// Once.Do is guaranteed to run only once. this not terribly important
@@ -102,8 +123,17 @@ func init() {
 		}
 	}
 
+	// relative path supplied; try to convert it to absolute path
 	if _, err := os.Stat(config.Library.Queue); err != nil {
-		config.Library.Queue = getAbsPath(config.Library.Queue)
+		abs, err := getAbsPath(config.Library.Queue)
+		if err != nil { // absolute path does not exist; create it
+			_ = os.WriteFile(
+				filepath.Join(filepath.Dir(prog), abs),
+				[]byte(strings.Join(generateQueue(1000), "\n")),
+				0644,
+			)
+		}
+		config.Library.Queue = abs
 	}
 
 	// TODO: check int values, set to sane defaults
@@ -117,7 +147,7 @@ func init() {
 	} {
 		_, err := os.Stat(p)
 		if err != nil { //|| !i.IsDir() {
-			log.Fatalln("not a directory: ", p)
+			panic(fmt.Sprintln("not a directory:", p))
 		}
 	}
 
@@ -149,8 +179,3 @@ func init() {
 
 	// log.Println(c.Library.Foo)
 }
-
-// func init() {
-// 	// config.Once.Do(config.init) // config is still nil
-// 	once.Do(config.init) // method runs, but seems to have no effect
-// }
