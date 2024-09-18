@@ -76,8 +76,8 @@ func init() {
 	}
 
 	for _, v := range []string{
-		config.Discogs.Key,
-		config.Discogs.Username,
+		// config.Discogs.Key,
+		// config.Discogs.Username,
 		config.Library.Root,
 		config.Library.Queue,
 	} {
@@ -108,6 +108,10 @@ func init() {
 	// if _, err := os.ReadFile(c.Library.Queue); err != nil {
 	// 	panic("no queue file")
 	// }
+
+	if config.Discogs.Key == "" {
+		return
+	}
 
 	// https://github.com/Xe/x/blob/master/entropy/shannon.go
 	l := len(config.Discogs.Key)

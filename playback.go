@@ -153,6 +153,11 @@ func (c *postPlaybackCmd) Run() error {
 	writeQueue(nq)
 	log.Println("removed:", c.relpath)
 
+	if config.Discogs.Username == "" || config.Discogs.Key == "" {
+		log.Println("no discogs key, skipping rate")
+		return nil
+	}
+
 	artist, album := filepath.Split(c.relpath)
 
 	// remove possible translation
