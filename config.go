@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/spf13/viper"
 )
 
 // https://github.com/Ragnaroek/run-slacker/blob/a7a9e3618a10ab7a6c099cbb4210ee0c9af1469a/run.go#L16
@@ -70,9 +70,25 @@ func init() {
 	// https://medium.easyread.co/just-call-your-code-only-once-256f69ed39a8?gi=3f3afe51e2a4
 	// https://github.com/gami/simple_arch_example/blob/34fb11a31acc35fcb01a1e36c3ea1194bbe23074/config/config.go#L32
 
-	_, err := toml.DecodeFile(getAbsPath("config.toml"), &config)
+	// note: both viper and toml suffer from relpath issue; specifically,
+	// tests will be run in /tmp, where config.toml cannot be found.
+	// however, viper makes it easy to check multiple paths
+
+	// fmt.Println("config init")
+
+	viper.AddConfigPath(".") // relative to this file
+	prog, _ := os.Executable()
+	viper.AddConfigPath(filepath.Dir(prog)) // relative to wherever the binary is
+	viper.SetConfigName("config")
+	viper.SetConfigType("toml")
+
+	err := viper.ReadInConfig()
 	if err != nil {
-		panic(err)
+		panic("No config found")
+	}
+
+	if err := viper.Unmarshal(&config); err != nil {
+		log.Fatalf("unable to decode into struct, %v", err)
 	}
 
 	for _, v := range []string{
