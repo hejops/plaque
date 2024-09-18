@@ -198,12 +198,16 @@ func (c *postPlaybackCmd) Run() error {
 
 	}
 
-	// TODO: this is not very ergonomic; but wrapping the returned []Artist
+	// this is not terribly ergonomic; but wrapping the returned []Artist
 	// in a struct seems even more annoying
-	art := browseArtists(discogsSearchArtist(artist))
-	// art := discogsSearchArtist(artist).browse()
-	art.Name = artist
-	art.rate()
+	artists := discogsSearchArtist(artist)
+	if len(artists) > 0 {
+		art := browseArtists(artists)
+		if art != nil {
+			art.Name = artist // disregard value given by discogs
+			art.rate()
+		}
+	}
 
 	return nil
 }
