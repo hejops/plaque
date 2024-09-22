@@ -23,35 +23,71 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"plaque/discogs"
 )
 
 const QueueCount = 5
+
+func mpvRunning() bool {
+	// https://github.com/mitchellh/go-ps/blob/master/process_linux.go
+	running := false
+	_ = filepath.WalkDir("/proc", func(path string, d fs.DirEntry, err error) error {
+		if d.IsDir() || filepath.Base(path) != "stat" {
+			return nil
+		}
+		b, e := os.ReadFile(path)
+		if e != nil {
+			panic(e)
+		}
+
+		s := string(b)
+		start := strings.IndexRune(s, '(')
+		end := strings.IndexRune(s, ')')
+		if end < 0 {
+			return nil
+		}
+		if s[start+1:end] == "mpv" {
+			running = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return running
+}
 
 func getResumes() *[]string {
 	// When mpv is quit with the `quit_watch_later` command, a file is
 	// written to this dir, containing the full path to the file.
 
+	if config == nil {
+		panic("init was not done")
+	}
+
 	var resumes []string
-	err := filepath.WalkDir(WatchLaterDir, func(path string, d fs.DirEntry, err error) error {
-		if d.IsDir() {
+	err := filepath.WalkDir(
+		config.Mpv.WatchLaterDir,
+		func(path string, d fs.DirEntry, err error) error {
+			if d.IsDir() {
+				return nil
+			}
+
+			fo, _ := os.Open(path)
+			defer fo.Close()
+			sc := bufio.NewScanner(fo)
+			sc.Scan() // only need to read 1st line
+			line := sc.Text()
+
+			file := line[2:] // # "# "
+			if fi, e := os.Stat(file); e == nil &&
+				!fi.IsDir() &&
+				strings.HasPrefix(file, config.Library.Root) {
+				rel, _ := filepath.Rel(config.Library.Root, filepath.Dir(file))
+				resumes = append(resumes, rel)
+			}
 			return nil
-		}
-
-		fo, _ := os.Open(path)
-		defer fo.Close()
-		sc := bufio.NewScanner(fo)
-		sc.Scan() // only need to read 1st line
-		line := sc.Text()
-
-		file := line[2:] // # "# "
-		if fi, e := os.Stat(file); e == nil &&
-			!fi.IsDir() &&
-			strings.HasPrefix(file, config.Library.Root) {
-			rel, _ := filepath.Rel(config.Library.Root, filepath.Dir(file))
-			resumes = append(resumes, rel)
-		}
-		return nil
-	})
+		},
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -63,7 +99,7 @@ func getResumes() *[]string {
 
 func willResume(relpath string) (resume bool) {
 	path := filepath.Join(config.Library.Root, relpath)
-	_ = filepath.WalkDir(WatchLaterDir, func(p string, d fs.DirEntry, _ error) error {
+	_ = filepath.WalkDir(config.Mpv.WatchLaterDir, func(p string, d fs.DirEntry, _ error) error {
 		if d.IsDir() {
 			return nil
 		}
@@ -130,9 +166,7 @@ func writeQueue(items []string) {
 // https://github.com/picosh/pico/blob/4632c9cd3d7bc37c9c0c92bdc3dc8a64928237d8/tui/senpai.go#L10
 
 // wrapper to call functions in a blocking manner (via Run)
-type postPlaybackCmd struct {
-	relpath string
-}
+type postPlaybackCmd struct{ relpath string }
 
 // required methods for tea.ExecCommand
 
@@ -142,10 +176,13 @@ func (c *postPlaybackCmd) Run() error {
 		// handled there. for practical purposes, all we need to do is
 		// just return to Queue
 		log.Println("will resume:", c.relpath)
+		os.Exit(0)
 		return nil
 		// // TODO: figure out how to return a 'real' error
 		// return fmt.Errorf("resume")
 	}
+
+	log.Println("playback done")
 
 	q := getQueue(0)
 	nq := *remove(&q, c.relpath)
@@ -153,7 +190,7 @@ func (c *postPlaybackCmd) Run() error {
 	writeQueue(nq)
 	log.Println("removed:", c.relpath)
 
-	if config.Discogs.Username == "" || config.Discogs.Key == "" {
+	if discogsEnabled {
 		log.Println("no discogs key, skipping rate")
 		return nil
 	}
@@ -172,15 +209,15 @@ func (c *postPlaybackCmd) Run() error {
 	}
 
 	// aside from edge cases, only classical albums have " [performer, ...]" suffix
-	var res SearchResult
+	var res discogs.SearchResult
 	if album[len(album)-1] == ']' {
-		res = discogsSearch(movePerfsToArtist(artist, album))
+		res = discogs.Search(movePerfsToArtist(artist, album))
 	} else {
-		res = discogsSearch(artist, album)
+		res = discogs.Search(artist, album)
 	}
 
 	rel := res.Primary()
-	if rating, _ := rel.rate(); rating == 1 &&
+	if rating, _ := rel.Rate(); rating == 1 &&
 		// guard rail to prevent deleting classical artists
 		album[len(album)-1] != ']' {
 		p := filepath.Join(config.Library.Root, artist)
@@ -188,31 +225,59 @@ func (c *postPlaybackCmd) Run() error {
 			return nil
 		}
 
-		fmt.Println("delete?", p)
+		fmt.Printf("Delete %s? [y/N] ", artist)
 		var del string
 		_, _ = fmt.Scanln(&del)
 		if del == "y" {
 			_ = os.RemoveAll(p)
-			log.Println("deleted:", p)
+			fmt.Println("Deleted", p)
 		}
-
+		return nil
 	}
 
 	// this is not terribly ergonomic; but wrapping the returned []Artist
 	// in a struct seems even more annoying
-	artists := discogsSearchArtist(artist)
-	if len(artists) > 0 {
-		art := browseArtists(artists)
-		if art != nil {
-			art.Name = artist // disregard value given by discogs
-			art.rate()
+	artists := discogs.SearchArtist(artist)
+	if len(artists) == 0 {
+		return nil
+	}
+
+	art := discogs.BrowseArtists(artists)
+	if art != nil {
+		return nil
+	}
+
+	// art.Rate(checkDir) // nonsensical api
+	// art.Rate() // sane api, but no checkDir
+
+	for _, rel := range art.Releases() {
+		// if !rel.IsRateable() || checkDir(artist, rel.Title) {
+		// 	continue
+		// }
+		if checkDir(artist, rel.Title) {
+			continue
 		}
+
+		// if errors.Is(err, discogs.ErrAlreadyRated) {
+		// 	continue
+		// }
+
+		_, err := rel.Rate()
+		switch err {
+		case discogs.ErrAlreadyRated, discogs.ErrNotRateable:
+			continue
+		}
+
+		break
 	}
 
 	return nil
 }
+
 func (c *postPlaybackCmd) SetStderr(io.Writer) {}
-func (c *postPlaybackCmd) SetStdin(io.Reader)  {}
+
+func (c *postPlaybackCmd) SetStdin(io.Reader) {}
+
 func (c *postPlaybackCmd) SetStdout(io.Writer) {}
 
 func play(relpath string) tea.Cmd {
@@ -226,7 +291,7 @@ func play(relpath string) tea.Cmd {
 
 	// TODO: online mode (search ytm)
 	path := filepath.Join(config.Library.Root, relpath)
-	mpvCmd := exec.Command("mpv", append(mpvArgs, path)...)
+	mpvCmd := exec.Command("mpv", append(strings.Fields(config.Mpv.Args), path)...)
 	log.Println("playing:", path)
 
 	return tea.Sequence(
@@ -246,5 +311,6 @@ func play(relpath string) tea.Cmd {
 			// 	return nil
 			// },
 		),
+		tea.ClearScreen,
 	)
 }

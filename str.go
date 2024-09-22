@@ -19,7 +19,7 @@ func makeBigrams(items []string) map[string][]int {
 	for _, a := range chars {
 		for _, b := range chars {
 			bi := string(a) + string(b)
-			if _, done := Bigrams[bi]; !done {
+			if _, done := big[bi]; !done {
 				big[bi] = searchSubstring(items, bi)
 			}
 		}

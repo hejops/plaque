@@ -8,6 +8,12 @@ import (
 	"github.com/charmbracelet/x/exp/teatest"
 )
 
+// t.Run("mock", func(t *testing.T) {
+// 	// setup mock dirs + cfg
+// 	// invoke entry point (queue)
+// 	// TODO: simulate keypresses?
+// })
+
 func checkModelOutput(
 	t *testing.T,
 	tm *teatest.TestModel,

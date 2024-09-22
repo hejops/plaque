@@ -5,42 +5,20 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/exp/rand"
 )
 
 func TestUtil(t *testing.T) {
-	strData := map[string]any{"1": "1"}
-	intData := map[string]any{"1": 1}
-	strBytes, _ := json.Marshal(strData)
-	intBytes, _ := json.Marshal(intData)
-	assert.NotEqual(t, strBytes, intBytes)
-
 	a, b := movePerfsToArtist("a", "b [c]")
 	assert.Equal(t, a, "a c")
 	assert.Equal(t, b, "b")
-
-	assert.Equal(
-		t,
-		alnum("foo'bar a(b)c d@e"),
-		"foo bar a b c d e",
-	)
-
-	assert.Equal(
-		t,
-		alnum("András"),
-		"Andras",
-	)
-
-	assert.Equal(
-		t,
-		alnum("Neworldisorder ⁽⁽⁽ᵗ·ʷ·ᵒ·ˢ· ᵛ-₆₆₆₎₎₎"),
-		"Neworldisorder             ",
-	)
 
 	ints := []int{1, 2, 3, 4, 5}
 	assert.Equal(
@@ -53,44 +31,24 @@ func TestUtil(t *testing.T) {
 	sortByYear(albums)
 	assert.Equal(t, albums, []string{"c (1988)", "b (1989)", "a (1990)"})
 
-	t.Run("mock", func(t *testing.T) {
-		// setup mock dirs + cfg
-		// invoke entry point (queue)
-		// TODO: simulate keypresses?
-	})
-
 	// assert.Equal(
 	// 	t,
 	// 	&ints,
 	// 	&removed,
 	// )
 
-	assert.Equal(t, surround(0, 5, 2), []int{0, 1, 5, 2, 4})
-	assert.Equal(t, surround(0, 6, 2), []int{0, 1, 6, 2, 5})
-	assert.Equal(t, surround(1, 6, 2), []int{1, 2, 0, 3, 6})
-	assert.Equal(t, surround(6, 6, 2), []int{6, 0, 5, 1, 4})
+	strData := map[string]any{"1": "1"}
+	intData := map[string]any{"1": 1}
+	strBytes, _ := json.Marshal(strData)
+	intBytes, _ := json.Marshal(intData)
+	assert.NotEqual(t, strBytes, intBytes)
+
+	assert.False(t, anyValue(map[int]bool{1: false, 2: false}))
+	assert.False(t, anyValue(map[int]bool{1: false}))
+	assert.False(t, anyValue(map[int]bool{}))
+	assert.True(t, anyValue(map[int]bool{1: true, 2: false}))
+	assert.True(t, anyValue(map[int]bool{1: true}))
 }
-
-func BenchmarkAlnum(b *testing.B) {
-	// 564271
-	// c := 'x'
-	for i := 0; i < b.N; i++ {
-		alnum("foo'bar a(b)c d@e")
-
-		// if c <= unicode.MaxASCII {
-		// 	if _, ok := alnumChars[c]; ok {
-		// 	}
-		// }
-	}
-}
-
-// func BenchmarkAlnum2(b *testing.B) {
-// 	c := 'x'
-// 	for i := 0; i < b.N; i++ {
-// 		if c <= unicode.MaxASCII && unicode.In(c, alnumChars2...) {
-// 		}
-// 	}
-// }
 
 func BenchmarkReadfile(b *testing.B) {
 	// https://stackoverflow.com/a/16615559
@@ -187,3 +145,8 @@ func TestSubstring(t *testing.T) {
 		assert.Len(t, searchSubstringBigram(sameStrings, x.needle), x.countB, x.needle)
 	}
 }
+
+// func BenchmarkWalk(b *testing.B) { generateAlloc(100) }
+
+// 5.6 s cold, 2.5 s warm
+func TestWalkAlloc(t *testing.T) { generateQueue(100) }

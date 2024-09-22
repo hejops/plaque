@@ -36,7 +36,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -123,11 +122,7 @@ func newBrowser(items []string, mode Mode) *Browser {
 // 	artist string
 // }
 
-var (
-	firstRun   = true
-	Bigrams    map[string][]int
-	bigramOnce sync.Once
-)
+var firstRun = true
 
 func queueBrowser() (b *Browser) {
 	// resume should only be true on the first invocation (i.e. on startup)
@@ -160,9 +155,9 @@ func artistBrowser() *Browser {
 	bigramOnce.Do(func() {
 		go func() {
 			// about 1.5 s for 37 k items
-			t := time.Now()
+			// t := time.Now()
 			Bigrams = makeBigrams(items)
-			log.Println("bigram construction took", time.Since(t).Seconds())
+			// log.Println("bigram construction took", time.Since(t).Seconds())
 		}()
 	})
 	return newBrowser(items, Artists)
@@ -268,6 +263,15 @@ func (b *Browser) Init() tea.Cmd {
 func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 	// log.Println("msg:", msg) // not terribly informative
 
+	// artist may have been deleted after playback
+	if b.mode == Albums {
+		sel := b.items[0]
+		artist := strings.Split(sel, "/")[0]
+		if _, err := os.Stat(filepath.Join(config.Library.Root, artist)); err != nil {
+			return queueBrowser(), tea.ClearScreen
+		}
+	}
+
 	// // https://leg100.github.io/en/posts/building-bubbletea-programs/
 	// spew.Fdump(b.dump, msg)
 
@@ -281,6 +285,8 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 			// even when dims are correctly initialised. allowing a
 			// ClearScreen leads to an unnecessary (and unsightly)
 			// re-render
+			// TODO: when we are in a new state, should also
+			// ClearScreen
 			b.width = msg.Width
 			b.height = msg.Height
 			return b, tea.ClearScreen
@@ -288,7 +294,8 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 
 	case tea.KeyMsg:
 
-		if msg.Type == tea.KeyRunes || msg.String() == " " {
+		if len(b.matches) > 0 && // prevent further input when no matches
+			msg.Type == tea.KeyRunes || msg.String() == " " {
 			b.input += string(msg.Runes)
 			b.updateSearch()
 			return b, nil
@@ -349,9 +356,11 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 			// 	b.offset = b.cursor - b.height
 			// }
 
-		// case "ctrl+t":
-		// 	// TODO: queue -> artists, else -> queue
-		// 	return b.getNewState()
+		case "ctrl+t":
+			// TODO: queue -> artists, else -> queue
+			if b.mode != Artists {
+				return artistBrowser(), nil
+			}
 
 		// https://github.com/antonmedv/walk/blob/ba821ed78f31e0ebd46eeef19cfe642fc1ec4330/main.go#L259 (?)
 		case "enter":
@@ -378,8 +387,8 @@ func (b *Browser) getNewState() (*Browser, tea.Cmd) {
 	sel := b.items[pos] // relpath
 	switch b.mode {
 	case Artists:
-		return albumsBrowser(sel), nil
-		// return albumsBrowser(sel), tea.ClearScreen
+		// return albumsBrowser(sel), nil
+		return albumsBrowser(sel), tea.ClearScreen
 
 	case Queue:
 
@@ -418,7 +427,8 @@ func (b *Browser) getNewState() (*Browser, tea.Cmd) {
 			os.Exit(0)
 		}
 
-		return queueBrowser(), nil
+		// return queueBrowser(), nil
+		return queueBrowser(), tea.ClearScreen
 
 	default:
 		panic("Invalid state")

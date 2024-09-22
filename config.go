@@ -1,12 +1,8 @@
-// Config initialisation procedures
-
 package main
 
 import (
-	"fmt"
 	"io/fs"
 	"log"
-	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -14,41 +10,24 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/spf13/viper"
+
+	"plaque/discogs"
 )
 
-// https://github.com/Ragnaroek/run-slacker/blob/a7a9e3618a10ab7a6c099cbb4210ee0c9af1469a/run.go#L16
-
-// TODO: switch from toml to viper https://github.com/spf13/viper#reading-config-files (esp for defaults)
-
-type Config struct {
-	Discogs struct {
-		Username   string `toml:"username"`
-		Key        string `toml:"key"`
-		MaxResults int    `toml:"max_results"`
-	}
-
-	// TODO: can toml infer?
-	Library struct {
-		Root  string `toml:"root"`
-		Queue string `toml:"queue"`
-		// Foo   string
-	}
-
-	Mpv struct {
-		Args          string
-		WatchLaterDir string
-	}
-}
-
 var (
-	config *Config
-	// once   sync.Once
+	config *struct {
+		Library struct {
+			Root  string
+			Queue string
+		}
+		Mpv struct {
+			Args string
+			// default: "$HOME/.local/state/mpv/watch_later"
+			WatchLaterDir string `mapstructure:"watch_later_dir"`
+		}
+	}
 
-	// TODO: can be declared in config (with defaults)
-
-	// https://mpv.io/manual/master/#options-watch-later-dir
-	WatchLaterDir = os.ExpandEnv("$HOME/.local/state/mpv/watch_later")
-	MpvArgs       = strings.Fields("--mute=no --no-audio-display --pause=no --start=0%")
+	discogsEnabled bool
 )
 
 // Get path of p, relative to the binary. Returns error if p does not exist.
@@ -95,28 +74,38 @@ func init() {
 	// tests will be run in /tmp, where config.toml cannot be found.
 	// however, viper makes it easy to check multiple paths
 
-	// fmt.Println("config init")
+	// TODO: replace global config var with viper.GetViper()? callers would
+	// have to call viper.GetViper().Get(s), which is dumb
 
-	viper.AddConfigPath(".") // relative to this file
+	// if not New, the Viper from discogs will be inherited, and
+	// discogs/config.toml will be preferentially loaded
+	x := viper.New()
+
+	x.AddConfigPath(".") // relative to this file
 	prog, _ := os.Executable()
-	viper.AddConfigPath(filepath.Dir(prog)) // relative to wherever the binary is
-	viper.SetConfigName("config")
-	viper.SetConfigType("toml")
+	x.AddConfigPath(filepath.Dir(prog)) // relative to wherever the binary is
+	x.SetConfigName("config")
+	x.SetConfigType("toml")
 
-	err := viper.ReadInConfig()
+	x.SetDefault("mpv.args", "--mute=no --no-audio-display --pause=no --start=0%")
+	x.SetDefault("mpv.watch_later_dir", os.ExpandEnv("$HOME/.local/state/mpv/watch_later"))
+
+	// i am generally fine with keeping 2 separate config objects, so i
+	// don't use MergeInConfig
+	err := x.ReadInConfig()
 	if err != nil {
 		panic("No config found")
 	}
 
-	if err := viper.Unmarshal(&config); err != nil {
+	if err := x.Unmarshal(&config); err != nil {
 		log.Fatalf("unable to decode into struct, %v", err)
 	}
 
 	for _, v := range []string{
-		// config.Discogs.Key,
-		// config.Discogs.Username,
 		config.Library.Root,
 		config.Library.Queue,
+		// config.Mpv.Args,
+		// config.Mpv.WatchLaterDir,
 	} {
 		if v == "" {
 			log.Fatalln("empty fields found:\n", spew.Sdump(config))
@@ -136,46 +125,7 @@ func init() {
 		config.Library.Queue = abs
 	}
 
-	// TODO: check int values, set to sane defaults
-	if config.Discogs.MaxResults == 0 {
-		config.Discogs.MaxResults = 10
-	}
-
-	for _, p := range []string{
-		config.Library.Root,
-		config.Library.Queue,
-	} {
-		_, err := os.Stat(p)
-		if err != nil { //|| !i.IsDir() {
-			panic(fmt.Sprintln("not a directory:", p))
-		}
-	}
-
-	// if _, err := os.ReadFile(c.Library.Queue); err != nil {
-	// 	panic("no queue file")
-	// }
-
-	if config.Discogs.Key == "" {
-		return
-	}
-
-	// https://github.com/Xe/x/blob/master/entropy/shannon.go
-	l := len(config.Discogs.Key)
-
-	charFreq := make(map[rune]float64)
-	for _, i := range config.Discogs.Key {
-		charFreq[i]++
-	}
-
-	var sum float64
-	for _, c := range charFreq {
-		f := c / float64(l)
-		sum += f * math.Log2(f)
-	}
-
-	if int(math.Ceil(sum*-1))*l < 200 {
-		panic("invalid key?")
-	}
-
-	// log.Println(c.Library.Foo)
+	discogsEnabled = discogs.Config != nil &&
+		discogs.Config.Username != "" &&
+		discogs.Config.Key != ""
 }

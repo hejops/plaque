@@ -1,7 +1,8 @@
-package main
+// TUI for discogs data
+
+package discogs
 
 import (
-	"log"
 	"strconv"
 	"time"
 
@@ -27,8 +28,8 @@ type discogsBrowser struct {
 
 // additional heuristics/tui will usually be required to select the correct
 // artist; this is left to callers
-func discogsSearchArtist(artist string) []Artist {
-	resp := discogsReq(
+func SearchArtist(artist string) []Artist {
+	resp := makeReq(
 		"/database/search",
 		"GET",
 		map[string]any{"q": alnum(artist), "type": "artist"},
@@ -38,7 +39,11 @@ func discogsSearchArtist(artist string) []Artist {
 	}{}).Results
 }
 
-func browseArtists(artists []Artist) Artist {
+// Start a bubbletea program to browse artist discographies, and return
+// selected artist. Returns nil if no selection was made.
+//
+// Panics if an empty slice is passed
+func BrowseArtists(artists []Artist) *Artist {
 	// // sort by artist name len (usually silly)
 	// slices.SortFunc(artists, func(a Artist, b Artist) int {
 	// 	an := len(a.Title)
@@ -68,8 +73,11 @@ func browseArtists(artists []Artist) Artist {
 		panic(err)
 	}
 	x := m.(*discogsBrowser)
+	if x.cursor < 0 {
+		return nil
+	}
 	art := x.artists[x.cursor]
-	return art
+	return &art
 }
 
 // Fetch n artists on each side of the cursor
@@ -107,7 +115,7 @@ func (db *discogsBrowser) getReleases(n int) {
 					},
 				),
 			)
-			log.Println("table:", t)
+			// log.Println("table:", t)
 			db.releasesTable[artist.Id] = &t
 
 		}
@@ -119,7 +127,7 @@ func (db *discogsBrowser) getReleases(n int) {
 // initial command. To not perform an initial command return nil.
 func (db *discogsBrowser) Init() tea.Cmd {
 	// always populate map value for 1st artist
-	db.getReleases(0) // TODO: buggy
+	db.getReleases(0)
 
 	go db.getReleases(2)
 	return nil
@@ -133,10 +141,15 @@ func (db *discogsBrowser) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		db.width = msg.Width
 		db.height = msg.Height
+		return db, tea.ClearScreen
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "enter":
+		case "enter":
+			return db, tea.Quit
+
+		case "esc", "q":
+			db.cursor = -1
 			return db, tea.Quit
 
 		case "j":
@@ -158,6 +171,8 @@ func (db *discogsBrowser) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return db, nil
 }
 
+var isSelected = map[bool]string{true: "→", false: " "}
+
 // View renders the program's UI, which is just a string. The view is
 // rendered after every Update.
 func (db *discogsBrowser) View() string {
@@ -167,7 +182,7 @@ func (db *discogsBrowser) View() string {
 	}
 
 	left := list.New(artists).Enumerator(func(items list.Items, index int) (arrow string) {
-		arrow = IsSelected[index == db.cursor]
+		arrow = isSelected[index == db.cursor]
 
 		switch db.artists[index].UserData["in_collection"] {
 		case true:
