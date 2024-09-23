@@ -190,7 +190,7 @@ func (c *postPlaybackCmd) Run() error {
 	writeQueue(nq)
 	log.Println("removed:", c.relpath)
 
-	if discogsEnabled {
+	if !discogsEnabled {
 		log.Println("no discogs key, skipping rate")
 		return nil
 	}
