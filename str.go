@@ -82,6 +82,17 @@ func searchSubstringBigram(items []string, target string) []int {
 
 	if len(target) < 2 {
 		return searchSubstring(items, target)
+	} else if strings.Contains(target, ".") {
+		// this might look like a really crappy impl, but it doesn't
+		// feel that slow
+		r := regexp.MustCompile("(?i)" + target)
+		matches := []int{}
+		for i, x := range items {
+			if r.Match([]byte(x)) {
+				matches = append(matches, i)
+			}
+		}
+		return matches
 	}
 
 	first := target[:2]
