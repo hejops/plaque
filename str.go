@@ -15,7 +15,7 @@ var (
 )
 
 func makeBigrams(items []string) map[string][]int {
-	chars := "abcdefghijklmnoprstuvwxyz "
+	chars := "abcdefghijklmnopqrstuvwxyz "
 	big := make(map[string][]int)
 	for _, a := range chars {
 		for _, b := range chars {
