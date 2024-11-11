@@ -3,6 +3,7 @@
 package main
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
