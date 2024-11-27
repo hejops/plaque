@@ -295,6 +295,25 @@ func play(relpath string) tea.Cmd {
 	log.Println("playing:", path)
 
 	return tea.Sequence(
+		func() tea.Msg {
+			if config.Playback.Before == "" {
+				return nil
+			}
+			args := strings.Fields(config.Playback.Before)
+			var expandedArgs []string
+			for _, arg := range args[1:] {
+				if arg[0] == '$' {
+					arg = os.ExpandEnv(arg)
+				}
+				expandedArgs = append(expandedArgs, arg)
+			}
+			cmd := exec.Command(args[0], expandedArgs...)
+			err := cmd.Run()
+			if err != nil {
+				log.Println("could not run cmd", cmd, err)
+			}
+			return nil
+		},
 		tea.ExecProcess(mpvCmd, nil),
 		tea.Exec(
 			&postPlaybackCmd{relpath: relpath},

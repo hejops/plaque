@@ -20,6 +20,10 @@ var (
 			Root  string
 			Queue string
 		}
+		Playback struct {
+			Before string // arbitrary command to be invoked before playback
+			// After  string
+		}
 		Mpv struct {
 			Args string
 			// default: "$HOME/.local/state/mpv/watch_later"
