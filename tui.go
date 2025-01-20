@@ -306,9 +306,15 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 
 		switch msg.String() {
 
-		case "ctrl+w":
-			b.input = "" // TODO: delete last word
-			b.cursor = 0 // fzf resets cursor pos
+		case "ctrl+t", "tab":
+			// TODO: else -> queue?
+			if !mpvRunning() && b.mode == Queue {
+				return artistBrowser(), nil
+			}
+
+		case "ctrl+w": // delete last word
+			i := strings.LastIndex(b.input, " ")
+			b.input = b.input[:i+1]
 			b.updateSearch()
 			return b, nil
 
@@ -356,12 +362,6 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 			// 	b.offset = b.cursor - b.height
 			// }
 
-		case "ctrl+t":
-			// TODO: queue -> artists, else -> queue
-			if b.mode != Artists {
-				return artistBrowser(), nil
-			}
-
 		// https://github.com/antonmedv/walk/blob/ba821ed78f31e0ebd46eeef19cfe642fc1ec4330/main.go#L259 (?)
 		case "enter":
 			if len(b.matches) == 0 {
@@ -408,27 +408,31 @@ func (b *Browser) getNewState() (*Browser, tea.Cmd) {
 		// preempt that removal here
 		nb.queued[sel] = false
 
-		// TODO: detect if sel was deleted (in which case, go back to Queue)
+		// sel may have been deleted
+		if _, err := os.Stat(filepath.Join(config.Library.Root, sel)); err != nil {
+			q := getQueue(0)
+			nq := remove(&q, sel)
+			writeQueue(*nq)
+			return queueBrowser(), tea.ClearScreen
+		}
+
 		return nb, play(sel)
 
 	case Albums:
-		// add selected item to queue (if it exists), then go back to
-		// Queue (or exit)
-		if _, err := os.Stat(filepath.Join(config.Library.Root, sel)); err == nil {
-			q := getQueue(0)
-			nq := append(q, sel)
-			ensure(len(nq)-len(q) == 1)
-			writeQueue(nq)
-			log.Println("queued:", sel)
-		}
-
-		// TODO: should be propagated via Browser field or something
 		if mpvRunning() {
-			os.Exit(0)
+			return b, tea.Quit
+		} else if firstRun { // only reachable via <tab> in queue mode
+			return queueBrowser(), play(sel)
+		} else {
+			if _, err := os.Stat(filepath.Join(config.Library.Root, sel)); err == nil {
+				q := getQueue(0)
+				nq := append(q, sel)
+				ensure(len(nq)-len(q) == 1)
+				writeQueue(nq)
+				log.Println("queued:", sel)
+			}
+			return queueBrowser(), tea.ClearScreen
 		}
-
-		// return queueBrowser(), nil
-		return queueBrowser(), tea.ClearScreen
 
 	default:
 		panic("Invalid state")
