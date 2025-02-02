@@ -420,10 +420,6 @@ func (b *Browser) getNewState() (*Browser, tea.Cmd) {
 
 	case Albums:
 		if mpvRunning() {
-			return b, tea.Quit
-		} else if firstRun { // only reachable via <tab> in queue mode
-			return queueBrowser(), play(sel)
-		} else {
 			if _, err := os.Stat(filepath.Join(config.Library.Root, sel)); err == nil {
 				q := getQueue(0)
 				nq := append(q, sel)
@@ -431,6 +427,10 @@ func (b *Browser) getNewState() (*Browser, tea.Cmd) {
 				writeQueue(nq)
 				log.Println("queued:", sel)
 			}
+			return b, tea.Quit
+		} else if firstRun { // only reachable via <tab> in queue mode
+			return queueBrowser(), play(sel)
+		} else {
 			return queueBrowser(), tea.ClearScreen
 		}
 
