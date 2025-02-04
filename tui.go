@@ -314,7 +314,11 @@ func (b *Browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) { // {{{
 
 		case "ctrl+w": // delete last word
 			i := strings.LastIndex(b.input, " ")
-			b.input = b.input[:i+1]
+			if i+1 == len(b.input) { // only one word (with trailing space)
+				b.input = ""
+			} else {
+				b.input = b.input[:i+1]
+			}
 			b.updateSearch()
 			return b, nil
 
