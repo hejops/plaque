@@ -141,7 +141,8 @@ func getQueue(n int) []string {
 	// TODO: split off sampling
 	switch n {
 	case 0:
-		return relpaths
+		// last element is empty string, for some reason
+		return relpaths[:len(relpaths)-1]
 	default:
 		var sel []string
 		idxs := rand.Perm(len(relpaths) - 1)
