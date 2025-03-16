@@ -139,13 +139,20 @@ func queueBrowser() (b *Browser) {
 
 	resumes := getResumes()
 	switch {
-	case firstRun && resumes != nil:
-		b = newBrowser(*resumes, Queue)
-		b.noquit = true
+	case firstRun:
 		firstRun = false
+		if resumes != nil && len(*resumes) > 0 { // TODO: Once.Do
+			b = newBrowser(*resumes, Queue)
+			b.noquit = true
+			return b
+		}
+		fallthrough
 	default:
-		b = newBrowser(getQueue(QueueCount), Queue)
+		b = newBrowser(getQueue(config.NQueue), Queue)
 	}
+
+	// if firstRun is set to false here, albums can never be played on demand
+	// firstRun = false
 
 	return b
 }
