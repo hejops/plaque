@@ -141,7 +141,8 @@ func getQueue(n int) []string {
 	// TODO: split off sampling
 	switch n {
 	case 0:
-		// last element is empty string, for some reason
+		// 'valid' text file should always end with a trailing newline.
+		// in this case, last element will be empty string
 		return relpaths[:len(relpaths)-1]
 	default:
 		var sel []string
@@ -156,7 +157,8 @@ func getQueue(n int) []string {
 func writeQueue(items []string) {
 	err := os.WriteFile(
 		config.Library.Queue,
-		[]byte(strings.Join(items, "\n")),
+		// []byte(strings.Join(items, "\n"))
+		[]byte(strings.Join(items, "\n")+"\n"), // file must have trailing newline
 		0666,
 	)
 	if err != nil {
